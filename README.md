@@ -1,26 +1,24 @@
-# SpotOrganize
+# Spotify Playlist Organizer
 
-A powerful Spotify playlist organizer that helps you manage and discover music in new ways.
+A web application that helps you organize your Spotify playlists based on various criteria like genre, artist, or release year.
 
-## Setup
+## Features
 
-1. Copy `.env.example` to `.env`:
-```bash
-cp .env.example .env
-```
+- 🔐 Spotify OAuth Authentication
+- 📝 Create playlists based on:
+  - Genre
+  - Artist
+  - Release Year
+- 🎵 Automatic song filtering and organization
+- 🎨 Modern, responsive UI with TailwindCSS
 
-2. Add your Spotify API credentials to `.env`:
-```
-VITE_SPOTIFY_CLIENT_ID=your_client_id_here
-VITE_SPOTIFY_CLIENT_SECRET=your_client_secret_here
-```
+## Tech Stack
 
-3. Install dependencies:
-```bash
-npm install
-```
+- Next.js 13+ (App Router)
+- TypeScript
+- TailwindCSS
+- Spotify Web API
 
-4. Start the development server:
-```bash
-npm run dev
-```
+## Getting Started
+
+1. Clone the repository:
