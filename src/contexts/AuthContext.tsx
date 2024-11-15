@@ -1,73 +1,129 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+interface User {
+  id: string;
+  display_name: string;
+  images: { url: string }[];
+  email: string;
+}
 
 interface AuthContextType {
   isAuthenticated: boolean;
   loading: boolean;
-  login: () => void;
-  logout: () => void;
-  token: string | null;
+  user: User | null;
+  login: () => Promise<void>;
+  logout: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextType>({
+  isAuthenticated: false,
+  loading: true,
+  user: null,
+  login: async () => {},
+  logout: async () => {},
+});
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [token, setToken] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Check for token in URL (Spotify redirect)
-    const hash = window.location.hash;
-    if (hash) {
-      const token = hash
-        .substring(1)
-        .split('&')
-        .find(elem => elem.startsWith('access_token'))
-        ?.split('=')[1];
-
-      if (token) {
-        localStorage.setItem('spotify_token', token);
-        setToken(token);
-        setIsAuthenticated(true);
-        window.location.hash = '';
-      }
-    }
-
-    // Check for existing token
-    const existingToken = localStorage.getItem('spotify_token');
-    if (existingToken) {
-      setToken(existingToken);
-      setIsAuthenticated(true);
-    }
-
-    setLoading(false);
-  }, []);
-
-  const login = () => {
-    const client_id = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
-    const redirect_uri = window.location.origin;
-    const scope = 'user-library-read playlist-modify-public playlist-modify-private';
-    
-    window.location.href = `https://accounts.spotify.com/authorize?client_id=${client_id}&response_type=token&redirect_uri=${redirect_uri}&scope=${encodeURIComponent(scope)}`;
-  };
-
-  const logout = () => {
-    localStorage.removeItem('spotify_token');
-    setToken(null);
-    setIsAuthenticated(false);
-  };
-
-  return (
-    <AuthContext.Provider value={{ isAuthenticated, loading, login, logout, token }}>
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
+export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (context === undefined) {
+  if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
-}
+};
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const navigate = useNavigate();
+
+  const checkAuthStatus = async () => {
+    try {
+      const token = localStorage.getItem('spotify_access_token');
+      if (!token) {
+        setLoading(false);
+        return;
+      }
+
+      const response = await fetch('https://api.spotify.com/v1/me', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const userData = await response.json();
+        setUser(userData);
+        setIsAuthenticated(true);
+      } else {
+        localStorage.removeItem('spotify_access_token');
+        setIsAuthenticated(false);
+        setUser(null);
+      }
+    } catch (error) {
+      console.error('Auth check failed:', error);
+      setIsAuthenticated(false);
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    checkAuthStatus();
+  }, []);
+
+  const login = async () => {
+    const client_id = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
+    const redirect_uri = 'http://localhost:5173/callback';
+    
+    const scopes = [
+      'user-read-email',
+      'user-read-private',
+      'user-library-read',
+      'playlist-modify-public',
+      'playlist-modify-private',
+      'user-top-read',
+      'playlist-read-private',
+      'playlist-read-collaborative',
+      'user-library-read',
+      'user-read-recently-played',
+      'user-read-playback-state',
+      'user-modify-playback-state',
+      'user-read-currently-playing',
+      'streaming'
+    ].join(' ');
+
+    const state = Math.random().toString(36).substring(7);
+    localStorage.setItem('spotify_auth_state', state);
+
+    const params = new URLSearchParams({
+      client_id: client_id,
+      response_type: 'token',
+      redirect_uri: redirect_uri,
+      scope: scopes,
+      state: state,
+      show_dialog: 'true'
+    });
+
+    window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
+  };
+
+  const logout = async () => {
+    localStorage.removeItem('spotify_access_token');
+    setIsAuthenticated(false);
+    setUser(null);
+    navigate('/login');
+  };
+
+  const value = {
+    isAuthenticated,
+    loading,
+    user,
+    login,
+    logout,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+};

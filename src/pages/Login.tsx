@@ -1,67 +1,141 @@
 import React from 'react';
-import { Music } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { Navigate } from 'react-router-dom';
+import { Music, Shuffle, ListMusic, ArrowRight, Github, Settings } from 'lucide-react';
 
-export default function Login() {
-  const { login, isAuthenticated } = useAuth();
-
-  if (isAuthenticated) {
-    return <Navigate to="/" />;
-  }
+const Login = () => {
+  const { login } = useAuth();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-900 to-black flex flex-col items-center justify-center px-4">
-      <div className="max-w-md w-full space-y-8 text-center">
-        <div className="flex flex-col items-center">
-          <div className="bg-green-500 p-3 rounded-full">
-            <Music className="w-8 h-8 text-white" />
+    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black">
+      {/* Hero Section */}
+      <section className="container mx-auto px-6 pt-32 pb-20 text-center">
+        <div className="flex items-center justify-center gap-3 mb-8">
+          <Music className="h-12 w-12 text-emerald-500" />
+          <h1 className="text-3xl font-bold text-white">SpotOrganize</h1>
+        </div>
+        <h2 className="text-5xl md:text-6xl font-bold text-white mb-6">
+          Your Music, Untangled <span className="text-emerald-500">🎶</span>
+        </h2>
+        <p className="text-xl text-gray-300 mb-8 max-w-3xl mx-auto">
+          If your saved songs on Spotify feel like a chaotic mess, we get it. Sifting through hundreds—maybe 
+          thousands—of tracks to create playlists is overwhelming. That's why we built SpotOrganize: the fastest 
+          way to sort and curate your liked songs into playlists you'll actually enjoy.
+        </p>
+        <button
+          onClick={login}
+          className="px-8 py-4 bg-emerald-500 text-white rounded-full text-lg font-semibold hover:bg-emerald-600 transition-colors flex items-center gap-2 mx-auto"
+        >
+          Stop Scrolling, Start Organizing <ArrowRight className="w-5 h-5" />
+        </button>
+      </section>
+
+      {/* Pain Points Section */}
+      <section className="container mx-auto px-6 py-20">
+        <h2 className="text-3xl font-bold text-white text-center mb-8">We Know the Struggle:</h2>
+        <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+          <div className="bg-gray-800/50 backdrop-blur-sm p-8 rounded-2xl">
+            <p className="text-gray-300 text-lg">
+              You've been saving songs for years. That perfect chill playlist? Never got around to making it. 
+              Your workout jams? Buried under your guilty-pleasure tracks. Sound familiar?
+            </p>
           </div>
-          <h2 className="mt-6 text-4xl font-extrabold text-white">
-            SpotOrganize
-          </h2>
-          <p className="mt-2 text-sm text-gray-300">
-            Organize your Spotify likes into beautiful playlists
+          <div className="bg-gray-800/50 backdrop-blur-sm p-8 rounded-2xl">
+            <p className="text-gray-300 text-lg">
+              The problem isn't your music taste—it's the tools. Spotify makes it easy to save songs but leaves 
+              the organizing to you. And let's be real, who has time to manually create playlists?
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* Features Section */}
+      <section className="container mx-auto px-6 py-20">
+        <h2 className="text-3xl font-bold text-white text-center mb-12">How It Works</h2>
+        <div className="grid md:grid-cols-4 gap-8">
+          {features.map((feature, index) => (
+            <div key={index} className="bg-gray-800/50 backdrop-blur-sm p-8 rounded-2xl hover:bg-gray-800/70 transition-colors">
+              <feature.icon className="w-12 h-12 text-emerald-500 mb-4" />
+              <h3 className="text-xl font-semibold text-white mb-2">{feature.title}</h3>
+              <p className="text-gray-300">{feature.description}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Emotional Appeal Section */}
+      <section className="container mx-auto px-6 py-20">
+        <div className="max-w-4xl mx-auto text-center">
+          <h2 className="text-3xl font-bold text-white mb-6">Rediscover the Joy of Your Music</h2>
+          <p className="text-xl text-gray-300 mb-8">
+            Your Spotify library is more than just songs—it's memories, moods, and moments waiting to be replayed. 
+            Don't let disorganization hold you back. With SpotOrganize, you can finally enjoy your music the way 
+            it was meant to be: curated, personal, and stress-free.
           </p>
         </div>
+      </section>
 
-        <div className="mt-8 space-y-4">
+      {/* CTA Section */}
+      <section className="container mx-auto px-6 py-20">
+        <div className="bg-gradient-to-r from-emerald-500/10 to-emerald-600/10 backdrop-blur-sm rounded-2xl p-12 text-center">
+          <h2 className="text-3xl font-bold text-white mb-4">Ready to Transform Your Music Library?</h2>
+          <p className="text-xl text-gray-300 mb-8">
+            Stop letting your saved tracks gather dust. With SpotOrganize, you can bring order to the chaos 
+            and create playlists that match your mood, your moments, and your life.
+          </p>
           <button
             onClick={login}
-            className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-full text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors duration-200"
+            className="px-8 py-4 bg-emerald-500 text-white rounded-full text-lg font-semibold hover:bg-emerald-600 transition-colors"
           >
-            Connect with Spotify
+            Get Started for Free
           </button>
         </div>
+      </section>
 
-        <div className="mt-8">
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-700"></div>
-            </div>
-            <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-transparent text-gray-400">
-                Features
-              </span>
-            </div>
+      {/* Footer */}
+      <footer className="container mx-auto px-6 py-8 border-t border-gray-800">
+        <div className="flex flex-col md:flex-row items-center justify-between">
+          <div className="flex items-center gap-2 mb-4 md:mb-0">
+            <Music className="h-6 w-6 text-emerald-500" />
+            <span className="text-white">SpotOrganize</span>
           </div>
-
-          <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="bg-black bg-opacity-50 rounded-lg p-4">
-              <h3 className="text-lg font-medium text-white">Smart Organization</h3>
-              <p className="mt-2 text-sm text-gray-300">
-                Automatically organize your liked songs by genre, artist, or year
-              </p>
-            </div>
-            <div className="bg-black bg-opacity-50 rounded-lg p-4">
-              <h3 className="text-lg font-medium text-white">Custom Playlists</h3>
-              <p className="mt-2 text-sm text-gray-300">
-                Create and manage playlists directly in your Spotify account
-              </p>
-            </div>
+          <div className="flex items-center gap-4">
+            <a
+              href="https://github.com/elbarroca/spotorganize"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              <Github className="w-6 h-6" />
+            </a>
+            <span className="text-gray-400">© 2024 SpotOrganize. All rights reserved.</span>
           </div>
         </div>
-      </div>
+      </footer>
     </div>
   );
-}
+};
+
+const features = [
+  {
+    icon: Music,
+    title: 'Fetch Liked Songs',
+    description: 'Instantly pull in all your saved tracks from Spotify—no endless scrolling required.',
+  },
+  {
+    icon: Shuffle,
+    title: 'Smart Sorting',
+    description: 'Automatically organize your music into playlists by genre, artist, or release year.',
+  },
+  {
+    icon: ListMusic,
+    title: 'Seamless Creation',
+    description: 'Create and update playlists directly in your Spotify account with one click.',
+  },
+  {
+    icon: Settings,
+    title: 'Review & Edit',
+    description: 'Fine-tune your playlists, rename them, or tweak the tracklist to make them perfect.',
+  },
+];
+
+export default Login;
