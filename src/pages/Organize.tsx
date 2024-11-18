@@ -93,7 +93,90 @@ const AddToPlaylistModal: React.FC<ModalProps> = ({ isOpen, onClose, selectedTra
   );
 };
 
+const DeleteConfirmationModal = ({ 
+  playlist, 
+  onConfirm, 
+  onClose 
+}: { 
+  playlist: Playlist | null;
+  onConfirm: () => void;
+  onClose: () => void;
+}) => {
+  if (!playlist) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
+      <div className="bg-gray-800 rounded-xl w-full max-w-md p-6">
+        <h3 className="text-xl font-semibold text-white mb-4">Delete Playlist?</h3>
+        <p className="text-gray-300 mb-6">
+          Are you sure you want to delete "{playlist.name}"? This action cannot be undone.
+        </p>
+        <div className="flex items-center justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+          >
+            Delete Playlist
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const SuccessModal = ({ 
+  playlist, 
+  onClose,
+  onOpenSpotify 
+}: { 
+  playlist: { name: string; id: string } | null;
+  onClose: () => void;
+  onOpenSpotify: () => void;
+}) => {
+  if (!playlist) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
+      <div className="bg-gray-800 rounded-xl w-full max-w-md p-6 animate-fadeIn">
+        <div className="text-center">
+          <div className="w-16 h-16 bg-emerald-500 rounded-full flex items-center justify-center mx-auto mb-6">
+            <Music className="w-8 h-8 text-white animate-scaleIn" />
+          </div>
+          <h3 className="text-2xl font-bold text-white mb-2 animate-slideUp">
+            Now "{playlist.name}" is live on your Spotify
+          </h3>
+          <p className="text-gray-300 mb-8 animate-slideUp delay-100">
+            Listen with joy
+          </p>
+          <div className="flex items-center justify-center gap-4 animate-slideUp delay-200">
+            <button
+              onClick={onClose}
+              className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-600 transition-colors"
+            >
+              Back to Dashboard
+            </button>
+            <button
+              onClick={onOpenSpotify}
+              className="px-6 py-3 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors"
+            >
+              Open in Spotify
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Organize = () => {
+  console.log('Organize component mounting');
+
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -105,6 +188,8 @@ const Organize = () => {
   const [audioPreview, setAudioPreview] = useState<HTMLAudioElement | null>(null);
   const [filteredPlaylists, setFilteredPlaylists] = useState<Playlist[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [playlistToDelete, setPlaylistToDelete] = useState<Playlist | null>(null);
+  const [newPlaylist, setNewPlaylist] = useState<{ name: string; id: string } | null>(null);
 
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -138,9 +223,18 @@ const Organize = () => {
     }
   };
 
+  useEffect(() => {
+    console.log('Loading state:', loading);
+  }, [loading]);
+
   // Initial fetch on mount
   useEffect(() => {
-    fetchPlaylists();
+    try {
+      console.log('Organize useEffect running');
+      fetchPlaylists();
+    } catch (error) {
+      console.error('Error in Organize component:', error);
+    }
   }, []);
 
   useEffect(() => {
@@ -257,9 +351,7 @@ const Organize = () => {
       });
 
       if (!createResponse.ok) {
-        const errorData = await createResponse.json();
-        console.error('Playlist creation failed:', errorData);
-        throw new Error(errorData.error?.message || 'Failed to create playlist');
+        throw new Error('Failed to create playlist');
       }
 
       const newPlaylist = await createResponse.json();
@@ -268,7 +360,7 @@ const Organize = () => {
       if (data.imageUrl) {
         try {
           const base64Image = data.imageUrl.split(',')[1];
-          const imageResponse = await fetch(`https://api.spotify.com/v1/playlists/${newPlaylist.id}/images`, {
+          await fetch(`https://api.spotify.com/v1/playlists/${newPlaylist.id}/images`, {
             method: 'PUT',
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -276,23 +368,38 @@ const Organize = () => {
             },
             body: base64Image
           });
-
-          if (!imageResponse.ok) {
-            console.error('Failed to upload playlist image');
-          }
         } catch (imageError) {
           console.error('Image upload failed:', imageError);
         }
       }
 
+      // Add selected tracks if any
+      if (selectedTracks.length > 0) {
+        const tracksToAdd = activePlaylist?.tracks.items
+          ?.filter(({ track }) => selectedTracks.includes(track.id))
+          .map(({ track }) => `spotify:track:${track.id}`);
+
+        if (tracksToAdd?.length) {
+          await fetch(`https://api.spotify.com/v1/playlists/${newPlaylist.id}/tracks`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ uris: tracksToAdd })
+          });
+        }
+      }
+
       // Refresh playlists and show success
       await fetchPlaylists();
+      setNewPlaylist({ name: data.name, id: newPlaylist.id });
       setIsCreateModalOpen(false);
       alert('Playlist created successfully!');
       
     } catch (error) {
       console.error('Create playlist error:', error);
-      alert(error instanceof Error ? error.message : 'Failed to create playlist. Please try again.');
+      alert(error instanceof Error ? error.message : 'Failed to create playlist');
     } finally {
       setIsProcessing(false);
     }
@@ -325,10 +432,52 @@ const Organize = () => {
     }
   };
 
-  if (loading) {
+  const handleDeletePlaylist = async (playlistId: string) => {
+    try {
+      const token = localStorage.getItem('spotify_access_token');
+      const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/followers`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        await fetchPlaylists(); // Refresh playlists
+        setPlaylistToDelete(null); // Close confirmation modal
+      }
+    } catch (error) {
+      console.error('Failed to delete playlist:', error);
+      alert('Failed to delete playlist. Please try again.');
+    }
+  };
+
+  useEffect(() => {
+    console.log('Playlists:', playlists);
+    console.log('Filtered Playlists:', filteredPlaylists);
+    console.log('Loading:', loading);
+  }, [playlists, filteredPlaylists, loading]);
+
+  if (loading || !filteredPlaylists) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
         <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!playlists.length) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
+        <div className="text-white text-center">
+          <p>No playlists found</p>
+          <button 
+            onClick={fetchPlaylists}
+            className="mt-4 px-4 py-2 bg-emerald-500 rounded-lg hover:bg-emerald-600 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
@@ -375,34 +524,50 @@ const Organize = () => {
         <div className="max-w-[1400px] mx-auto px-6 py-8">
           {viewMode === 'grid' ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {filteredPlaylists.map((playlist) => (
-                <div
-                  key={playlist.id}
-                  className="group relative bg-gray-800/50 rounded-lg overflow-hidden hover:bg-gray-800/70 transition-all duration-300"
-                >
-                  <div className="relative aspect-square">
-                    <img
-                      src={playlist.images[0]?.url || '/playlist-placeholder.png'}
-                      alt={playlist.name}
-                      className="w-full h-full object-cover"
-                    />
-                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                      <button
-                        onClick={() => fetchPlaylistTracks(playlist.id)}
-                        className="p-2 bg-emerald-500 rounded-full hover:bg-emerald-600 transition-colors"
-                      >
-                        <Music className="w-5 h-5 text-white" />
-                      </button>
+              {filteredPlaylists?.map((playlist) => {
+                if (!playlist || !playlist.images) return null;
+
+                const imageUrl = playlist.images?.[0]?.url || '/playlist-placeholder.png';
+                const playlistName = playlist.name || 'Untitled Playlist';
+                const trackCount = playlist.tracks?.total || 0;
+
+                return (
+                  <div
+                    key={playlist.id}
+                    className="group relative bg-gray-800/50 rounded-lg overflow-hidden hover:bg-gray-800/70 transition-all duration-300"
+                  >
+                    <div className="relative aspect-square">
+                      <img
+                        src={imageUrl}
+                        alt={playlistName}
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+                        <button
+                          onClick={() => fetchPlaylistTracks(playlist.id)}
+                          className="p-2 bg-emerald-500 rounded-full hover:bg-emerald-600 transition-colors"
+                        >
+                          <Music className="w-5 h-5 text-white" />
+                        </button>
+                        <button
+                          onClick={() => setPlaylistToDelete(playlist)}
+                          className="p-2 bg-red-500 rounded-full hover:bg-red-600 transition-colors"
+                        >
+                          <Trash2 className="w-5 h-5 text-white" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="p-3">
+                      <h3 className="text-white font-medium text-sm truncate">
+                        {playlistName}
+                      </h3>
+                      <p className="text-gray-400 text-xs">
+                        {trackCount} tracks
+                      </p>
                     </div>
                   </div>
-                  <div className="p-3">
-                    <h3 className="text-white font-medium text-sm truncate">{playlist.name}</h3>
-                    <p className="text-gray-400 text-xs">
-                      {playlist.tracks.total} tracks
-                    </p>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             // Tracks View
@@ -420,13 +585,22 @@ const Organize = () => {
                     {selectedTracks.length} tracks selected
                   </span>
                   {selectedTracks.length > 0 && (
-                    <button
-                      onClick={() => setIsModalOpen(true)}
-                      className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors flex items-center gap-2"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Add to Playlist
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setIsModalOpen(true)}
+                        className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors flex items-center gap-2"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add to Playlist
+                      </button>
+                      <button
+                        onClick={() => setIsCreateModalOpen(true)}
+                        className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-2"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Create New Playlist
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -497,6 +671,29 @@ const Organize = () => {
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
         onCreatePlaylist={handleCreatePlaylist}
+      />
+
+      <DeleteConfirmationModal
+        playlist={playlistToDelete}
+        onConfirm={() => {
+          if (playlistToDelete) {
+            handleDeletePlaylist(playlistToDelete.id);
+          }
+        }}
+        onClose={() => setPlaylistToDelete(null)}
+      />
+
+      <SuccessModal
+        playlist={newPlaylist}
+        onClose={() => {
+          setNewPlaylist(null);
+          navigate('/');
+        }}
+        onOpenSpotify={() => {
+          if (newPlaylist) {
+            window.open(`https://open.spotify.com/playlist/${newPlaylist.id}`, '_blank');
+          }
+        }}
       />
     </>
   );

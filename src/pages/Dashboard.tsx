@@ -69,23 +69,23 @@ const Dashboard = () => {
     generatePersonalizedPlaylists();
   }, []);
 
-  useEffect(() => {
-    const fetchCurrentlyPlaying = async () => {
-      try {
-        const token = localStorage.getItem('spotify_access_token');
-        const response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          setCurrentlyPlaying(data);
-        }
-      } catch (error) {
-        console.error('Failed to fetch currently playing:', error);
+  const fetchCurrentlyPlaying = async () => {
+    try {
+      const token = localStorage.getItem('spotify_access_token');
+      const response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentlyPlaying(data);
       }
-    };
+    } catch (error) {
+      console.error('Failed to fetch currently playing:', error);
+    }
+  };
 
+  useEffect(() => {
     fetchCurrentlyPlaying();
     const interval = setInterval(fetchCurrentlyPlaying, 5000);
     return () => clearInterval(interval);
@@ -253,14 +253,12 @@ const Dashboard = () => {
       );
 
       if (response.ok) {
-        // Update local state immediately for better UX
         setCurrentlyPlaying(prev => prev ? {
           ...prev,
           is_playing: !prev.is_playing
         } : null);
         
-        // Fetch the latest state
-        fetchCurrentlyPlaying();
+        await fetchCurrentlyPlaying();
       }
     } catch (error) {
       console.error('Failed to toggle playback:', error);
@@ -281,8 +279,9 @@ const Dashboard = () => {
       );
 
       if (response.ok) {
-        // Wait a bit for Spotify to update
-        setTimeout(fetchCurrentlyPlaying, 300);
+        setTimeout(() => {
+          fetchCurrentlyPlaying();
+        }, 300);
       }
     } catch (error) {
       console.error('Failed to skip track:', error);
@@ -303,8 +302,9 @@ const Dashboard = () => {
       );
 
       if (response.ok) {
-        // Wait a bit for Spotify to update
-        setTimeout(fetchCurrentlyPlaying, 300);
+        setTimeout(() => {
+          fetchCurrentlyPlaying();
+        }, 300);
       }
     } catch (error) {
       console.error('Failed to skip to previous track:', error);
@@ -345,7 +345,7 @@ const Dashboard = () => {
               Your Playlists
             </button>
             <button 
-              onClick={() => navigate('/organize')}
+              onClick={() => navigate('/Organize')}
               className="w-full flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
             >
               <Music className="w-5 h-5" />

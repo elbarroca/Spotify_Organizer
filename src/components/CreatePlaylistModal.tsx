@@ -5,9 +5,19 @@ interface CreatePlaylistModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCreatePlaylist: (data: { name: string; description: string; imageUrl: string | null }) => Promise<void>;
+  selectedTracks?: {
+    id: string;
+    name: string;
+    artists: { name: string }[];
+    album: {
+      name: string;
+      images: { url: string }[];
+    };
+    duration_ms: number;
+  }[];
 }
 
-const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({ isOpen, onClose, onCreatePlaylist }) => {
+const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({ isOpen, onClose, onCreatePlaylist, selectedTracks = [] }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -113,6 +123,29 @@ const CreatePlaylistModal: React.FC<CreatePlaylistModalProps> = ({ isOpen, onClo
               placeholder="What's this playlist about?"
             />
           </div>
+
+          {selectedTracks.length > 0 && (
+            <div className="mt-4">
+              <h4 className="text-white font-medium mb-2">Selected Tracks ({selectedTracks.length})</h4>
+              <div className="max-h-[200px] overflow-y-auto space-y-2">
+                {selectedTracks.map(track => (
+                  <div key={track.id} className="flex items-center gap-3">
+                    <img
+                      src={track.album.images[0]?.url}
+                      alt={track.album.name}
+                      className="w-10 h-10 rounded"
+                    />
+                    <div>
+                      <p className="text-white text-sm">{track.name}</p>
+                      <p className="text-gray-400 text-xs">
+                        {track.artists.map(a => a.name).join(', ')}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <button
             type="submit"

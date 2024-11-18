@@ -21,6 +21,7 @@ export interface AudioFeatures {
   valence: number;
   danceability: number;
   tempo: number;
+  instrumentalness: number;
 }
 
 export interface GeneratedPlaylist {
@@ -439,26 +440,27 @@ export function generateActivityPlaylists(
     'Meditation': (f: AudioFeatures) => f.energy < 0.3 && f.instrumentalness > 0.5
   };
 
-  return Object.entries(activityCategories)
-    .map(([activity, condition]) => {
-      const activityTracks = tracks.filter(track => {
-        const features = audioFeatures[track.id];
-        return features && condition(features);
-      });
+  const playlists: GeneratedPlaylist[] = [];
 
-      if (activityTracks.length >= 10) {
-        return {
-          name: activity,
-          description: `Perfect for ${activity.toLowerCase()}`,
-          tracks: activityTracks,
-          type: 'activity',
-          tags: [activity.toLowerCase(), 'activity-based', 'auto-generated'],
-          imageUrl: activityTracks[0]?.album.images[0]?.url
-        };
-      }
-      return null;
-    })
-    .filter((playlist): playlist is GeneratedPlaylist => playlist !== null);
+  Object.entries(activityCategories).forEach(([activity, condition]) => {
+    const activityTracks = tracks.filter(track => {
+      const features = audioFeatures[track.id];
+      return features && condition(features);
+    });
+
+    if (activityTracks.length >= 10) {
+      playlists.push({
+        name: activity,
+        description: `Perfect for ${activity.toLowerCase()}`,
+        tracks: activityTracks,
+        type: 'activity',
+        tags: [activity.toLowerCase(), 'activity-based', 'auto-generated'],
+        imageUrl: activityTracks[0]?.album.images[0]?.url || ''
+      });
+    }
+  });
+
+  return playlists;
 }
 
 export function generateDecadePlaylists(tracks: SpotifyTrack[]): GeneratedPlaylist[] {

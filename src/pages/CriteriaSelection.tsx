@@ -9,7 +9,8 @@ import {
   Radio,
   ArrowRight,
   Sparkles,
-  Headphones
+  Headphones,
+  Home
 } from 'lucide-react';
 
 const organizationOptions = [
@@ -79,17 +80,28 @@ const CriteriaSelection = () => {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900/20 to-gray-900 overflow-hidden">
-      {/* Animated Background Gradient */}
-      <div className="fixed inset-0">
-        <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 via-purple-500/5 to-blue-500/5" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,_rgba(17,24,39,0.7),rgba(0,0,0,0.9))]" />
-      </div>
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900/20 to-gray-900">
+      {/* Header */}
+      <header className="bg-black/50 backdrop-blur-sm border-b border-white/10">
+        <div className="max-w-[1400px] mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => navigate('/')}
+              className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
+            >
+              <Home className="w-5 h-5" />
+              Dashboard
+            </button>
+            <span className="text-gray-500">/</span>
+            <h1 className="text-white font-semibold">Create Playlist</h1>
+          </div>
+        </div>
+      </header>
 
       {/* Content */}
-      <div className="relative z-10">
+      <div className="relative">
         {/* Hero Section */}
-        <div className="container mx-auto px-6 pt-20 pb-12 text-center">
+        <div className="container mx-auto px-6 pt-12 pb-8 text-center">
           <div className="flex items-center justify-center gap-4 mb-8">
             <div className="p-4 bg-emerald-500/10 rounded-2xl">
               <Headphones className="w-12 h-12 text-emerald-500" />
@@ -103,7 +115,7 @@ const CriteriaSelection = () => {
           </p>
         </div>
 
-        {/* Options Grid */}
+        {/* Options Grid - Updated hover states */}
         <div className="container mx-auto px-6 pb-20">
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-7xl mx-auto">
             {organizationOptions.map((option) => (
@@ -111,14 +123,18 @@ const CriteriaSelection = () => {
                 key={option.id}
                 onClick={() => navigate(`/create?criteria=${option.id}`)}
                 className={`
-                  group relative bg-gray-800/30 backdrop-blur-sm rounded-2xl p-8 
-                  hover:bg-gray-800/50 transition-all duration-500 text-left
-                  hover:scale-[1.02] ${option.bgGlow} hover:shadow-2xl
-                  border border-white/5 hover:border-white/10
+                  group relative backdrop-blur-sm rounded-2xl p-8 
+                  bg-gradient-to-br from-gray-800/30 to-gray-900/30
+                  hover:from-gray-800/50 hover:to-gray-900/50
+                  transition-all duration-500 text-left
+                  hover:scale-[1.02] ${option.bgGlow}
+                  border border-white/5 hover:border-white/20
                 `}
               >
-                {/* Background Gradient */}
-                <div className={`absolute inset-0 bg-gradient-to-br ${option.gradient} rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-500`} />
+                {/* Background Glow */}
+                <div className={`absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500
+                  bg-gradient-to-br ${option.gradient} rounded-2xl blur-xl`} 
+                />
                 
                 {/* Content */}
                 <div className="relative z-10">
@@ -158,29 +174,39 @@ const CriteriaSelection = () => {
           </div>
         </div>
 
-        {/* Smart Mix CTA */}
+        {/* Smart Mix CTA - Updated hover states */}
         <div className="container mx-auto px-6 pb-20">
           <div className="max-w-3xl mx-auto">
-            <div className="bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent 
-              rounded-2xl p-8 backdrop-blur-sm border border-white/5 hover:border-white/10 
-              transition-all duration-500 hover:shadow-2xl hover:shadow-emerald-500/20">
-              <div className="text-center">
-                <Sparkles className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
-                <h3 className="text-2xl font-bold text-white mb-4">
-                  Can't Decide? Try Smart Mix
-                </h3>
-                <p className="text-gray-400 mb-6">
-                  Let our AI analyze your music taste and create the perfect combination of playlists
-                </p>
-                <button
-                  onClick={() => navigate('/create?criteria=smart')}
-                  className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r 
-                    from-emerald-500 to-emerald-600 text-white rounded-full hover:from-emerald-600 
-                    hover:to-emerald-700 transition-all duration-300 hover:scale-105 group"
-                >
-                  Create Smart Mix
-                  <ArrowRight className="w-5 h-5 transform group-hover:translate-x-1 transition-transform" />
-                </button>
+            <div className="relative overflow-hidden backdrop-blur-sm rounded-2xl p-8
+              bg-gradient-to-br from-gray-800/30 to-gray-900/30
+              hover:from-gray-800/50 hover:to-gray-900/50
+              border border-white/5 hover:border-white/20
+              transition-all duration-500 group">
+              {/* Background Glow */}
+              <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500
+                bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 blur-xl"
+              />
+              
+              {/* Content */}
+              <div className="relative z-10">
+                <div className="text-center">
+                  <Sparkles className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
+                  <h3 className="text-2xl font-bold text-white mb-4">
+                    Can't Decide? Try Smart Mix
+                  </h3>
+                  <p className="text-gray-400 mb-6">
+                    Let our AI analyze your music taste and create the perfect combination of playlists
+                  </p>
+                  <button
+                    onClick={() => navigate('/create?criteria=smart')}
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r 
+                      from-emerald-500 to-emerald-600 text-white rounded-full hover:from-emerald-600 
+                      hover:to-emerald-700 transition-all duration-300 hover:scale-105 group"
+                  >
+                    Create Smart Mix
+                    <ArrowRight className="w-5 h-5 transform group-hover:translate-x-1 transition-transform" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
