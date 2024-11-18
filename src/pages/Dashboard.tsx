@@ -1,12 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { 
   Music, 
-  PlayCircle, 
   Plus, 
   Save, 
-  LogOut, 
-  Home, 
-  Library, 
   Search,
   Loader2,
   ArrowRight,
@@ -323,240 +319,189 @@ const Dashboard = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex">
-      {/* Sidebar */}
-      <div className="w-64 bg-black/50 backdrop-blur-sm p-6 flex flex-col">
-        <div className="flex items-center gap-3 mb-12">
-          <Music className="h-8 w-8 text-emerald-500" />
-          <span className="text-xl font-bold text-white">SpotOrganize</span>
-        </div>
-
-        <nav className="flex-1">
-          <div className="space-y-2">
-            <button className="w-full flex items-center gap-3 px-4 py-3 text-white bg-white/10 rounded-lg">
-              <Home className="w-5 h-5" />
-              Dashboard
-            </button>
-            <button 
-              onClick={() => navigate('/playlists')}
-              className="w-full flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <Library className="w-5 h-5" />
-              Your Playlists
-            </button>
-            <button 
-              onClick={() => navigate('/Organize')}
-              className="w-full flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <Music className="w-5 h-5" />
-              Organize Music
-            </button>
-            <button 
-              onClick={() => navigate('/discover')}
-              className="w-full flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <Search className="w-5 h-5" />
-              Discover
-            </button>
-          </div>
-        </nav>
-
-        <div className="border-t border-white/10 pt-4">
-          <button 
-            onClick={() => useAuth().logout()}
-            className="w-full flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
-          >
-            <LogOut className="w-5 h-5" />
-            Logout
-          </button>
-        </div>
+    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black p-8">
+      {/* Welcome Section */}
+      <div className="mb-12">
+        <h1 className="text-4xl font-bold text-white mb-4">
+          Welcome back, {user?.display_name}! 👋
+        </h1>
+        <p className="text-gray-300 text-lg">
+          Here are your personalized playlists based on your recent activity
+        </p>
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 p-8 overflow-y-auto">
-        {/* Welcome Section */}
-        <div className="mb-12">
-          <h1 className="text-4xl font-bold text-white mb-4">
-            Welcome back, {user?.display_name}! 👋
-          </h1>
-          <p className="text-gray-300 text-lg">
-            Here are your personalized playlists based on your recent activity
-          </p>
-        </div>
-
-        {/* Quick Actions */}
-        <div className="grid grid-cols-3 gap-6 mb-12">
-          <button
-            onClick={() => navigate('/criteria')}
-            className="p-6 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-xl transition-colors group"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <Plus className="w-8 h-8 text-emerald-500" />
-              <ArrowRight className="w-6 h-6 text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-            </div>
-            <h3 className="text-xl font-semibold text-white text-left">Create New Playlist</h3>
-            <p className="text-gray-400 text-sm text-left mt-2">
-              Organize your music into custom playlists
-            </p>
-          </button>
-
-          <button
-            onClick={() => navigate('/discover')}
-            className="p-6 bg-purple-500/10 hover:bg-purple-500/20 rounded-xl transition-colors group"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <Search className="w-8 h-8 text-purple-500" />
-              <ArrowRight className="w-6 h-6 text-purple-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-            </div>
-            <h3 className="text-xl font-semibold text-white text-left">Discover New Music</h3>
-            <p className="text-gray-400 text-sm text-left mt-2">
-              Find similar artists and tracks
-            </p>
-          </button>
-
-          <button
-            onClick={() => navigate('/organize')}
-            className="p-6 bg-blue-500/10 hover:bg-blue-500/20 rounded-xl transition-colors group"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <Library className="w-8 h-8 text-blue-500" />
-              <ArrowRight className="w-6 h-6 text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-            </div>
-            <h3 className="text-xl font-semibold text-white text-left">Organize Library</h3>
-            <p className="text-gray-400 text-sm text-left mt-2">
-              Clean up and sort your music collection
-            </p>
-          </button>
-        </div>
-
-        {currentlyPlaying?.item && (
-          <div className="mb-12 bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 hover:bg-gray-800/60 transition-colors group">
-            <h2 className="text-2xl font-bold text-white mb-6">Now Playing</h2>
-            <div className="flex items-center gap-6">
-              <div className="relative">
-                <img 
-                  src={currentlyPlaying.item.album.images[0]?.url}
-                  alt={currentlyPlaying.item.album.name}
-                  className="w-24 h-24 rounded-lg shadow-lg group-hover:shadow-emerald-500/20"
-                />
-                <div className="absolute inset-0 bg-black/20 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-xl font-semibold text-white group-hover:text-emerald-500 transition-colors">
-                  {currentlyPlaying.item.name}
-                </h3>
-                <p className="text-gray-400">
-                  {currentlyPlaying.item.artists.map(a => a.name).join(', ')}
-                </p>
-              </div>
-              <div className="flex items-center gap-4">
-                <button 
-                  onClick={handleSkipPrevious}
-                  className="p-2 rounded-full hover:bg-white/10 transition-colors"
-                >
-                  <SkipBack className="w-6 h-6 text-white" />
-                </button>
-                <button 
-                  onClick={handlePlayPause}
-                  className="p-3 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white hover:scale-105 transition-all"
-                >
-                  {currentlyPlaying.is_playing ? (
-                    <Pause className="w-6 h-6" />
-                  ) : (
-                    <Play className="w-6 h-6" />
-                  )}
-                </button>
-                <button 
-                  onClick={handleSkipNext}
-                  className="p-2 rounded-full hover:bg-white/10 transition-colors"
-                >
-                  <SkipForward className="w-6 h-6 text-white" />
-                </button>
-              </div>
-            </div>
-            
-            {/* Progress Bar */}
-            <div className="mt-4 px-2">
-              <div className="h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-emerald-500 transition-all duration-1000"
-                  style={{ 
-                    width: `${(currentlyPlaying.progress_ms / currentlyPlaying.item.duration_ms) * 100}%` 
-                  }}
-                />
-              </div>
-            </div>
+      {/* Quick Actions */}
+      <div className="grid grid-cols-3 gap-6 mb-12">
+        <button
+          onClick={() => navigate('/criteria')}
+          className="p-6 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-xl transition-colors group"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <Plus className="w-8 h-8 text-emerald-500" />
+            <ArrowRight className="w-6 h-6 text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity" />
           </div>
-        )}
+          <h3 className="text-xl font-semibold text-white text-left">Create New Playlist</h3>
+          <p className="text-gray-400 text-sm text-left mt-2">
+            Organize your music into custom playlists
+          </p>
+        </button>
 
-        {/* Auto-generated Playlists */}
-        <h2 className="text-2xl font-bold text-white mb-6">Recently Generated Playlists</h2>
-        <div className="grid md:grid-cols-3 gap-8">
-          {autoPlaylists.map((playlist) => (
-            <div key={playlist.id} className="bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 hover:bg-gray-800/70 transition-all group">
-              <div className="flex justify-between items-start mb-4">
-                {playlist.isEditing ? (
-                  <input
-                    type="text"
-                    value={playlist.name}
-                    onChange={(e) => handleNameChange(playlist.id, e.target.value)}
-                    className="bg-gray-700 text-white px-3 py-1 rounded-md"
-                    onBlur={() => handleNameChange(playlist.id, playlist.name)}
-                    autoFocus
-                  />
-                ) : (
-                  <div>
-                    <h3 className="text-xl font-semibold text-white group-hover:text-emerald-500 transition-colors">
-                      {playlist.name}
-                    </h3>
-                    <p className="text-gray-400 text-sm mt-1">{playlist.description}</p>
-                  </div>
-                )}
-              </div>
+        <button
+          onClick={() => navigate('/discover')}
+          className="p-6 bg-purple-500/10 hover:bg-purple-500/20 rounded-xl transition-colors group"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <Search className="w-8 h-8 text-purple-500" />
+            <ArrowRight className="w-6 h-6 text-purple-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
+          <h3 className="text-xl font-semibold text-white text-left">Discover New Music</h3>
+          <p className="text-gray-400 text-sm text-left mt-2">
+            Find similar artists and tracks
+          </p>
+        </button>
 
-              {/* Track Preview */}
-              <div className="space-y-2 mb-4">
-                {playlist.tracks.slice(0, 3).map((track) => (
-                  <div key={track.id} className="flex items-center gap-3">
-                    <img
-                      src={track.album.images[0]?.url}
-                      alt={track.album.name}
-                      className="w-10 h-10 rounded"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white text-sm truncate">{track.name}</p>
-                      <p className="text-gray-400 text-xs truncate">
-                        {track.artists.map(a => a.name).join(', ')}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+        <button
+          onClick={() => navigate('/organize')}
+          className="p-6 bg-blue-500/10 hover:bg-blue-500/20 rounded-xl transition-colors group"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <Music className="w-8 h-8 text-blue-500" />
+            <ArrowRight className="w-6 h-6 text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
+          <h3 className="text-xl font-semibold text-white text-left">Organize Library</h3>
+          <p className="text-gray-400 text-sm text-left mt-2">
+            Clean up and sort your music collection
+          </p>
+        </button>
+      </div>
 
-              <button
-                onClick={() => saveToSpotify(playlist)}
-                disabled={savingPlaylist === playlist.id}
-                className={`w-full flex items-center justify-center gap-2 px-4 py-2 ${
-                  savingPlaylist === playlist.id 
-                    ? 'bg-emerald-700 cursor-not-allowed' 
-                    : 'bg-emerald-500 hover:bg-emerald-600'
-                } text-white rounded-full transition-colors`}
+      {currentlyPlaying?.item && (
+        <div className="mb-12 bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 hover:bg-gray-800/60 transition-colors group">
+          <h2 className="text-2xl font-bold text-white mb-6">Now Playing</h2>
+          <div className="flex items-center gap-6">
+            <div className="relative">
+              <img 
+                src={currentlyPlaying.item.album.images[0]?.url}
+                alt={currentlyPlaying.item.album.name}
+                className="w-24 h-24 rounded-lg shadow-lg group-hover:shadow-emerald-500/20"
+              />
+              <div className="absolute inset-0 bg-black/20 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-xl font-semibold text-white group-hover:text-emerald-500 transition-colors">
+                {currentlyPlaying.item.name}
+              </h3>
+              <p className="text-gray-400">
+                {currentlyPlaying.item.artists.map(a => a.name).join(', ')}
+              </p>
+            </div>
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={handleSkipPrevious}
+                className="p-2 rounded-full hover:bg-white/10 transition-colors"
               >
-                {savingPlaylist === playlist.id ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Creating Playlist...
-                  </>
+                <SkipBack className="w-6 h-6 text-white" />
+              </button>
+              <button 
+                onClick={handlePlayPause}
+                className="p-3 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white hover:scale-105 transition-all"
+              >
+                {currentlyPlaying.is_playing ? (
+                  <Pause className="w-6 h-6" />
                 ) : (
-                  <>
-                    <Save className="w-4 h-4" />
-                    Save to Spotify
-                  </>
+                  <Play className="w-6 h-6" />
                 )}
               </button>
+              <button 
+                onClick={handleSkipNext}
+                className="p-2 rounded-full hover:bg-white/10 transition-colors"
+              >
+                <SkipForward className="w-6 h-6 text-white" />
+              </button>
             </div>
-          ))}
+          </div>
+          
+          {/* Progress Bar */}
+          <div className="mt-4 px-2">
+            <div className="h-1 bg-gray-700 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-emerald-500 transition-all duration-1000"
+                style={{ 
+                  width: `${(currentlyPlaying.progress_ms / currentlyPlaying.item.duration_ms) * 100}%` 
+                }}
+              />
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* Auto-generated Playlists */}
+      <h2 className="text-2xl font-bold text-white mb-6">Recently Generated Playlists</h2>
+      <div className="grid md:grid-cols-3 gap-8">
+        {autoPlaylists.map((playlist) => (
+          <div key={playlist.id} className="bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 hover:bg-gray-800/70 transition-all group">
+            <div className="flex justify-between items-start mb-4">
+              {playlist.isEditing ? (
+                <input
+                  type="text"
+                  value={playlist.name}
+                  onChange={(e) => handleNameChange(playlist.id, e.target.value)}
+                  className="bg-gray-700 text-white px-3 py-1 rounded-md"
+                  onBlur={() => handleNameChange(playlist.id, playlist.name)}
+                  autoFocus
+                />
+              ) : (
+                <div>
+                  <h3 className="text-xl font-semibold text-white group-hover:text-emerald-500 transition-colors">
+                    {playlist.name}
+                  </h3>
+                  <p className="text-gray-400 text-sm mt-1">{playlist.description}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Track Preview */}
+            <div className="space-y-2 mb-4">
+              {playlist.tracks.slice(0, 3).map((track) => (
+                <div key={track.id} className="flex items-center gap-3">
+                  <img
+                    src={track.album.images[0]?.url}
+                    alt={track.album.name}
+                    className="w-10 h-10 rounded"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white text-sm truncate">{track.name}</p>
+                    <p className="text-gray-400 text-xs truncate">
+                      {track.artists.map(a => a.name).join(', ')}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={() => saveToSpotify(playlist)}
+              disabled={savingPlaylist === playlist.id}
+              className={`w-full flex items-center justify-center gap-2 px-4 py-2 ${
+                savingPlaylist === playlist.id 
+                  ? 'bg-emerald-700 cursor-not-allowed' 
+                  : 'bg-emerald-500 hover:bg-emerald-600'
+              } text-white rounded-full transition-colors`}
+            >
+              {savingPlaylist === playlist.id ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Creating Playlist...
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  Save to Spotify
+                </>
+              )}
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   );

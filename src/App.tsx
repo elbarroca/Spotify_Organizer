@@ -6,11 +6,22 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import CriteriaSelection from './pages/CriteriaSelection';
 import PlaylistCreation from './pages/PlaylistCreation';
-import Review from './pages/Review';
 import { AuthCallback } from './components/auth/AuthCallback';
 import Discover from './pages/Discover';
 import UserPlaylists from './pages/UserPlaylists';
 import Organize from './pages/Organize';
+import { Sidebar } from './components/Sidebar';
+
+function Layout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex h-screen bg-gradient-to-br from-black via-gray-900 to-black">
+      <Sidebar />
+      <main className="flex-1 overflow-auto p-8">
+        {children}
+      </main>
+    </div>
+  );
+}
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading, login } = useAuth();
@@ -65,7 +76,9 @@ function AppRoutes() {
         path="/"
         element={
           <PrivateRoute>
-            <Dashboard />
+            <Layout>
+              <Dashboard />
+            </Layout>
           </PrivateRoute>
         }
       />
@@ -73,7 +86,9 @@ function AppRoutes() {
         path="/criteria"
         element={
           <PrivateRoute>
-            <CriteriaSelection />
+            <Layout>
+              <CriteriaSelection />
+            </Layout>
           </PrivateRoute>
         }
       />
@@ -81,15 +96,9 @@ function AppRoutes() {
         path="/create"
         element={
           <PrivateRoute>
-            <PlaylistCreation />
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/review"
-        element={
-          <PrivateRoute>
-            <Review />
+            <Layout>
+              <PlaylistCreation />
+            </Layout>
           </PrivateRoute>
         }
       />
@@ -97,7 +106,9 @@ function AppRoutes() {
         path="/discover"
         element={
           <PrivateRoute>
-            <Discover />
+            <Layout>
+              <Discover />
+            </Layout>
           </PrivateRoute>
         }
       />
@@ -105,7 +116,9 @@ function AppRoutes() {
         path="/playlists"
         element={
           <PrivateRoute>
-            <UserPlaylists />
+            <Layout>
+              <UserPlaylists />
+            </Layout>
           </PrivateRoute>
         }
       />
@@ -113,7 +126,9 @@ function AppRoutes() {
         path="/organize"
         element={
           <PrivateRoute>
-            <Organize />
+            <Layout>
+              <Organize />
+            </Layout>
           </PrivateRoute>
         }
       />
