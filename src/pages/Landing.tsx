@@ -1,8 +1,8 @@
-import React from 'react';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from "../contexts/AuthContext";
 import { Music, Shuffle, ListMusic, ArrowRight, Github, Settings } from 'lucide-react';
+import { FaSpotify } from 'react-icons/fa';
 
-const Login = () => {
+export default function Landing() {
   const { login } = useAuth();
 
   return (
@@ -25,7 +25,8 @@ const Login = () => {
           onClick={login}
           className="px-8 py-4 bg-emerald-500 text-white rounded-full text-lg font-semibold hover:bg-emerald-600 transition-colors flex items-center gap-2 mx-auto"
         >
-          Stop Scrolling, Start Organizing <ArrowRight className="w-5 h-5" />
+          <FaSpotify className="text-2xl" />
+          <span>Continue with Spotify</span>
         </button>
       </section>
 
@@ -84,9 +85,10 @@ const Login = () => {
           </p>
           <button
             onClick={login}
-            className="px-8 py-4 bg-emerald-500 text-white rounded-full text-lg font-semibold hover:bg-emerald-600 transition-colors"
+            className="px-8 py-4 bg-emerald-500 text-white rounded-full text-lg font-semibold hover:bg-emerald-600 transition-colors flex items-center gap-2 mx-auto"
           >
-            Get Started for Free
+            <FaSpotify className="text-2xl" />
+            <span>Get Started for Free</span>
           </button>
         </div>
       </section>
@@ -113,7 +115,7 @@ const Login = () => {
       </footer>
     </div>
   );
-};
+}
 
 const features = [
   {
@@ -137,5 +139,3 @@ const features = [
     description: 'Fine-tune your playlists, rename them, or tweak the tracklist to make them perfect.',
   },
 ];
-
-export default Login;

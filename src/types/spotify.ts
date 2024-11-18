@@ -16,4 +16,16 @@ export interface SpotifyTrack {
     name: string
     release_date: string
   }
+}
+
+export interface Track {
+  id: string;
+  name: string;
+  artists: { id: string; name: string; }[];
+  album: {
+    name: string;
+    images: { url: string; }[];
+  };
+  duration_ms: number;
+  uri: string;
 } 

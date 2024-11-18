@@ -175,8 +175,6 @@ const SuccessModal = ({
 };
 
 const Organize = () => {
-  console.log('Organize component mounting');
-
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -191,16 +189,17 @@ const Organize = () => {
   const [playlistToDelete, setPlaylistToDelete] = useState<Playlist | null>(null);
   const [newPlaylist, setNewPlaylist] = useState<{ name: string; id: string } | null>(null);
 
+  const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
-  const { user } = useAuth();
 
   const fetchPlaylists = async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('spotify_access_token');
       
-      if (!token) {
-        throw new Error('No access token found');
+      if (!token || !isAuthenticated) {
+        console.log('Auth state:', { token: !!token, isAuthenticated });
+        return;
       }
 
       const response = await fetch('https://api.spotify.com/v1/me/playlists', {
@@ -210,12 +209,18 @@ const Organize = () => {
       });
 
       if (!response.ok) {
+        if (response.status === 401) {
+          // Token expired, trigger re-auth
+          localStorage.removeItem('spotify_access_token');
+          navigate('/');
+          return;
+        }
         throw new Error('Failed to fetch playlists');
       }
 
       const data = await response.json();
-      setPlaylists(data.items);
-      setFilteredPlaylists(data.items);
+      setPlaylists(data.items || []);
+      setFilteredPlaylists(data.items || []);
     } catch (error) {
       console.error('Failed to fetch playlists:', error);
     } finally {
@@ -223,21 +228,17 @@ const Organize = () => {
     }
   };
 
+  // Only fetch when authenticated and mounted
   useEffect(() => {
-    console.log('Loading state:', loading);
-  }, [loading]);
-
-  // Initial fetch on mount
-  useEffect(() => {
-    try {
-      console.log('Organize useEffect running');
+    if (isAuthenticated) {
       fetchPlaylists();
-    } catch (error) {
-      console.error('Error in Organize component:', error);
     }
-  }, []);
+  }, [isAuthenticated]);
 
+  // Search effect
   useEffect(() => {
+    if (!playlists.length) return;
+    
     if (searchTerm.trim() === '') {
       setFilteredPlaylists(playlists);
     } else {
@@ -248,6 +249,7 @@ const Organize = () => {
     }
   }, [searchTerm, playlists]);
 
+  // Cleanup audio preview
   useEffect(() => {
     return () => {
       if (audioPreview) {
@@ -332,8 +334,8 @@ const Organize = () => {
     try {
       const token = localStorage.getItem('spotify_access_token');
       
-      if (!user?.id) {
-        throw new Error('User ID not found');
+      if (!user?.id || !token) {
+        throw new Error('User ID or token not found');
       }
 
       // Create playlist
@@ -458,7 +460,17 @@ const Organize = () => {
     console.log('Loading:', loading);
   }, [playlists, filteredPlaylists, loading]);
 
-  if (loading || !filteredPlaylists) {
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
+        <div className="text-white text-center">
+          <p>Please log in to view your playlists</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
         <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
