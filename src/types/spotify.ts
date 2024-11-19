@@ -21,11 +21,10 @@ export interface SpotifyTrack {
 export interface Track {
   id: string;
   name: string;
-  artists: { id: string; name: string; }[];
+  artists: Array<{ id: string; name: string }>;
   album: {
-    name: string;
-    images: { url: string; }[];
+    images: Array<{ url: string }>;
   };
-  duration_ms: number;
+  preview_url: string | null;
   uri: string;
 } 

@@ -115,9 +115,7 @@ export default function Landing() {
       </footer>
     </div>
   );
-}
-
-const features = [
+}const features = [
   {
     icon: Music,
     title: 'Fetch Liked Songs',
@@ -139,3 +137,4 @@ const features = [
     description: 'Fine-tune your playlists, rename them, or tweak the tracklist to make them perfect.',
   },
 ];
+

@@ -1,5 +1,5 @@
 import { useAuth } from '@/contexts/AuthContext';
-import { ListMusic, LogOut, Home, Search, Library } from 'lucide-react';
+import { ListMusic, LogOut, Home, Search, Library, BarChart3, Music, Plus } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { cn } from '@/utils/cn';
 
@@ -12,10 +12,11 @@ export const Sidebar = () => {
   };
 
   const navItems = [
-    { icon: Home, label: 'Dashboard', path: '/' },
-    { icon: ListMusic, label: 'Create Personalized Playlists', path: '/playlists' },
+    { icon: Home, label: 'Dashboard', path: '/dashboard' },
+    { icon: Plus, label: 'Create Playlist', path: '/create' },
     { icon: Search, label: 'Discover', path: '/discover' },
     { icon: Library, label: 'Organize Library', path: '/organize' },
+    { icon: BarChart3, label: 'Profile Analytics', path: '/profile' },
   ];
 
   return (

@@ -1,4 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import SpotifyWebApi from 'spotify-web-api-node';
+
+const spotifyApi = new SpotifyWebApi({
+  clientId: import.meta.env.VITE_SPOTIFY_CLIENT_ID,
+  redirectUri: import.meta.env.VITE_REDIRECT_URI
+});
 
 interface User {
   id: string;
@@ -14,17 +20,10 @@ interface AuthContextType {
   login: () => void;
   logout: () => void;
   checkAuth: () => Promise<void>;
+  spotifyApi: SpotifyWebApi;
 }
 
-const AuthContext = createContext<AuthContextType>({
-  isAuthenticated: false,
-  loading: true,
-  user: null,
-  token: null,
-  login: () => {},
-  logout: () => {},
-  checkAuth: async () => {},
-});
+const AuthContext = createContext<AuthContextType | null>(null);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -48,55 +47,58 @@ const SPOTIFY_SCOPES = [
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
 
   const login = useCallback(() => {
-    const client_id = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
-    const redirect_uri = import.meta.env.VITE_REDIRECT_URI;
+    const state = Math.random().toString(36).substring(7);
+    localStorage.setItem('spotify_auth_state', state);
     
-    const authUrl = `https://accounts.spotify.com/authorize?client_id=${client_id}&response_type=token&redirect_uri=${redirect_uri}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}`;
+    const authUrl = new URL('https://accounts.spotify.com/authorize');
+    const params = {
+      client_id: import.meta.env.VITE_SPOTIFY_CLIENT_ID,
+      response_type: 'token',
+      redirect_uri: import.meta.env.VITE_REDIRECT_URI,
+      state,
+      scope: SPOTIFY_SCOPES,
+      show_dialog: 'true'
+    };
     
-    window.location.href = authUrl;
+    authUrl.search = new URLSearchParams(params).toString();
+    window.location.href = authUrl.toString();
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem('spotify_access_token');
+    localStorage.removeItem('spotify_auth_state');
     setIsAuthenticated(false);
     setUser(null);
     setToken(null);
+    spotifyApi.setAccessToken('');
+    window.location.href = '/';
   }, []);
 
   const checkAuth = useCallback(async () => {
     try {
       const storedToken = localStorage.getItem('spotify_access_token');
-      setToken(storedToken);
-
+      
       if (!storedToken) {
         setIsAuthenticated(false);
-        setUser(null);
+        setLoading(false);
         return;
       }
 
-      const response = await fetch('https://api.spotify.com/v1/me', {
-        headers: {
-          'Authorization': `Bearer ${storedToken}`
-        }
-      });
+      spotifyApi.setAccessToken(storedToken);
+      setToken(storedToken);
 
-      if (response.ok) {
-        const userData = await response.json();
-        setUser(userData);
-        setIsAuthenticated(true);
-      } else {
-        localStorage.removeItem('spotify_access_token');
-        setToken(null);
-        setIsAuthenticated(false);
-        setUser(null);
-      }
+      const response = await spotifyApi.getMe();
+      setUser(response.body);
+      setIsAuthenticated(true);
     } catch (error) {
       console.error('Auth check failed:', error);
+      localStorage.removeItem('spotify_access_token');
+      setToken(null);
       setIsAuthenticated(false);
       setUser(null);
     } finally {
@@ -110,12 +112,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const value = {
     isAuthenticated,
-    user,
     loading,
+    user,
     token,
     login,
     logout,
-    checkAuth
+    checkAuth,
+    spotifyApi
   };
 
   return (

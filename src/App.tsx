@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import React from 'react';
+import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Dashboard from './pages/Dashboard';
-import CriteriaSelection from './pages/CriteriaSelection';
+import CriteriaSelection from './pages/Create';
 import PlaylistCreation from './pages/PlaylistCreation';
 import { AuthCallback } from './components/auth/AuthCallback';
 import Discover from './pages/Discover';
@@ -12,6 +12,7 @@ import Organize from './pages/Organize';
 import { Sidebar } from './components/Sidebar';
 import Landing from './pages/Landing';
 import { Toaster } from 'sonner';
+import Profile from "@/pages/Profile"
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -38,7 +39,89 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   return isAuthenticated ? <>{children}</> : <Navigate to="/" />;
 }
 
-function AppRoutes() {
+const router = createBrowserRouter([
+  {
+    path: "/callback",
+    element: <AuthCallback />
+  },
+  {
+    path: "/",
+    element: <AuthWrapper><Landing /></AuthWrapper>
+  },
+  {
+    path: "/dashboard",
+    element: (
+      <PrivateRoute>
+        <Layout>
+          <Dashboard />
+        </Layout>
+      </PrivateRoute>
+    )
+  },
+  {
+    path: "/criteria",
+    element: (
+      <PrivateRoute>
+        <Layout>
+          <CriteriaSelection />
+        </Layout>
+      </PrivateRoute>
+    )
+  },
+  {
+    path: "/create",
+    element: (
+      <PrivateRoute>
+        <Layout>
+          <PlaylistCreation />
+        </Layout>
+      </PrivateRoute>
+    )
+  },
+  {
+    path: "/discover",
+    element: (
+      <PrivateRoute>
+        <Layout>
+          <Discover />
+        </Layout>
+      </PrivateRoute>
+    )
+  },
+  {
+    path: "/playlists",
+    element: (
+      <PrivateRoute>
+        <Layout>
+          <UserPlaylists />
+        </Layout>
+      </PrivateRoute>
+    )
+  },
+  {
+    path: "/organize",
+    element: (
+      <PrivateRoute>
+        <Layout>
+          <Organize />
+        </Layout>
+      </PrivateRoute>
+    )
+  },
+  {
+    path: "/profile",
+    element: (
+      <PrivateRoute>
+        <Layout>
+          <Profile />
+        </Layout>
+      </PrivateRoute>
+    )
+  }
+]);
+
+// Wrapper component to handle auth state for landing page
+function AuthWrapper({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth();
 
   if (loading) {
@@ -49,87 +132,19 @@ function AppRoutes() {
     );
   }
 
-  return (
-    <Routes>
-      <Route path="/callback" element={<AuthCallback />} />
-      
-      {/* Public routes */}
-      <Route 
-        path="/" 
-        element={isAuthenticated ? (
-          <Layout>
-            <Dashboard />
-          </Layout>
-        ) : (
-          <Landing />
-        )} 
-      />
+  if (isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
-      {/* Protected routes */}
-      <Route
-        path="/criteria"
-        element={
-          <PrivateRoute>
-            <Layout>
-              <CriteriaSelection />
-            </Layout>
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/create"
-        element={
-          <PrivateRoute>
-            <Layout>
-              <PlaylistCreation />
-            </Layout>
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/discover"
-        element={
-          <PrivateRoute>
-            <Layout>
-              <Discover />
-            </Layout>
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/playlists"
-        element={
-          <PrivateRoute>
-            <Layout>
-              <UserPlaylists />
-            </Layout>
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/organize"
-        element={
-          <PrivateRoute>
-            <Layout>
-              <Organize />
-            </Layout>
-          </PrivateRoute>
-        }
-      />
-    </Routes>
-  );
+  return <>{children}</>;
 }
 
 function App() {
   return (
-    <>
+    <AuthProvider>
+      <RouterProvider router={router} />
       <Toaster position="top-center" richColors />
-      <BrowserRouter>
-        <AuthProvider>
-          <AppRoutes />
-        </AuthProvider>
-      </BrowserRouter>
-    </>
+    </AuthProvider>
   );
 }
 

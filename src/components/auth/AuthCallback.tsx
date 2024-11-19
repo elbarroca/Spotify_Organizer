@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../../contexts/AuthContext';
-import { Loader2 } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
 export function AuthCallback() {
   const navigate = useNavigate();
@@ -9,21 +8,26 @@ export function AuthCallback() {
 
   useEffect(() => {
     const handleCallback = async () => {
-      // Get the hash fragment from the URL
-      const hash = window.location.hash.substring(1);
-      const params = new URLSearchParams(hash);
-      const accessToken = params.get('access_token');
+      if (window.location.hash) {
+        const params = new URLSearchParams(window.location.hash.substring(1));
+        const accessToken = params.get('access_token');
+        const state = params.get('state');
+        const storedState = localStorage.getItem('spotify_auth_state');
 
-      if (accessToken) {
-        // Store the token
-        localStorage.setItem('spotify_access_token', accessToken);
-        // Verify the token and update auth state
-        await checkAuth();
-        // Redirect to dashboard
-        navigate('/', { replace: true });
+        if (state === null || state !== storedState) {
+          console.error('State mismatch');
+          navigate('/');
+          return;
+        }
+
+        if (accessToken) {
+          localStorage.setItem('spotify_access_token', accessToken);
+          localStorage.removeItem('spotify_auth_state');
+          await checkAuth();
+          navigate('/dashboard');
+        }
       } else {
-        // If no token, redirect to landing
-        navigate('/', { replace: true });
+        navigate('/');
       }
     };
 
@@ -32,7 +36,7 @@ export function AuthCallback() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
-      <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+      <div className="text-xl text-white">Authenticating...</div>
     </div>
   );
 } 

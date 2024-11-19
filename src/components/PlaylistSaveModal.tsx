@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
-import { X, Upload, Loader2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Music, Loader2 } from 'lucide-react';
 
 interface PlaylistSaveModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (name: string, description: string, imageUrl?: string) => Promise<void>;
+  onSave: (name: string, description: string, imageUrl?: string) => void;
   defaultName?: string;
   defaultDescription?: string;
-  tracksCount: number;
+  tracksCount?: number;
+  customStyles?: any;
 }
 
 const PlaylistSaveModal: React.FC<PlaylistSaveModalProps> = ({
@@ -16,120 +17,186 @@ const PlaylistSaveModal: React.FC<PlaylistSaveModalProps> = ({
   onSave,
   defaultName = '',
   defaultDescription = '',
-  tracksCount
+  tracksCount = 0,
+  customStyles
 }) => {
   const [name, setName] = useState(defaultName);
   const [description, setDescription] = useState(defaultDescription);
   const [imageUrl, setImageUrl] = useState<string>();
-  const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImageUrl(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+  useEffect(() => {
+    if (isOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'unset';
     }
-  };
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, [isOpen]);
+
+  // Handle escape key press
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    if (isOpen) {
+      window.addEventListener('keydown', handleEscape);
+    }
+
+    return () => {
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [isOpen, onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSaving(true);
+    setIsLoading(true);
     try {
       await onSave(name, description, imageUrl);
-      onClose();
+      onClose(); // Close modal after successful save
     } finally {
-      setIsSaving(false);
+      setIsLoading(false);
     }
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-gray-800 rounded-xl w-full max-w-md p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xl font-semibold text-white">Save Playlist</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-white">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+    <div className="fixed inset-0 z-50 animate-fadeIn">
+      {/* Enhanced Backdrop with blur and animation */}
+      <div 
+        className="fixed inset-0 bg-black/90 backdrop-blur-md transition-opacity duration-300"
+        onClick={onClose}
+        style={{animation: 'fadeIn 0.2s ease-out'}}
+      />
+      
+      {/* Modal with enhanced visibility and animations */}
+      <div className="fixed inset-0 flex items-center justify-center p-4">
+        <div 
+          className="w-full max-w-md transform overflow-hidden rounded-2xl 
+            bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 p-6 text-left 
+            shadow-2xl transition-all border border-white/10 animate-slideIn"
+          style={{
+            boxShadow: '0 0 50px rgba(16, 185, 129, 0.1)',
+            animation: 'slideIn 0.3s ease-out'
+          }}
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Enhanced header with gradient text */}
+          <div className="flex items-center justify-between mb-8">
+            <h2 className="text-2xl font-bold bg-gradient-to-r from-white to-emerald-400 
+              bg-clip-text text-transparent">
+              Save New Playlist
+            </h2>
+            <button
+              onClick={onClose}
+              className="p-2 rounded-full hover:bg-white/10 transition-all duration-200 
+                hover:scale-110 group"
+            >
+              <X className="w-5 h-5 text-gray-400 group-hover:text-white 
+                transition-colors" />
+            </button>
+          </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-200 mb-1">
-              Playlist Image
-            </label>
-            <div className="relative h-32 bg-gray-700/50 rounded-lg overflow-hidden">
-              {imageUrl ? (
-                <img 
-                  src={imageUrl} 
-                  alt="Playlist cover" 
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <Upload className="w-8 h-8 text-gray-400" />
-                </div>
-              )}
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Enhanced input fields */}
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Playlist Name
+              </label>
               <input
-                type="file"
-                accept="image/*"
-                onChange={handleImageUpload}
-                className="absolute inset-0 opacity-0 cursor-pointer"
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full px-4 py-3 bg-gray-800/50 border border-white/10 rounded-lg 
+                  text-white placeholder-gray-500 focus:outline-none focus:ring-2 
+                  focus:ring-emerald-500 focus:border-transparent transition-all
+                  hover:bg-gray-800/70"
+                placeholder="Enter playlist name..."
+                required
               />
             </div>
-          </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-200 mb-1">
-              Playlist Name
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full bg-gray-700/50 text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              required
-            />
-          </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                Description
+              </label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full px-4 py-3 bg-gray-800/50 border border-white/10 rounded-lg 
+                  text-white placeholder-gray-500 focus:outline-none focus:ring-2 
+                  focus:ring-emerald-500 focus:border-transparent transition-all
+                  hover:bg-gray-800/70"
+                placeholder="Enter description..."
+                rows={3}
+              />
+            </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-200 mb-1">
-              Description
-            </label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              className="w-full bg-gray-700/50 text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
-              rows={3}
-            />
-          </div>
-
-          <p className="text-gray-400 text-sm">
-            {tracksCount} tracks will be added to this playlist
-          </p>
-
-          <button
-            type="submit"
-            disabled={isSaving}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isSaving ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Creating Playlist...
-              </>
-            ) : (
-              'Create Playlist'
-            )}
-          </button>
-        </form>
+            {/* Enhanced footer */}
+            <div className="flex items-center justify-between pt-6 border-t border-white/5">
+              <div className="flex items-center gap-2 text-gray-400 bg-gray-800/30 
+                px-3 py-1.5 rounded-full">
+                <Music className="w-5 h-5 text-emerald-500" />
+                <span>{tracksCount} tracks</span>
+              </div>
+              
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="px-6 py-3 bg-emerald-500 text-white rounded-lg font-medium
+                  hover:bg-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500 
+                  focus:ring-offset-2 focus:ring-offset-gray-900 disabled:opacity-50 
+                  disabled:cursor-not-allowed transition-all flex items-center gap-2
+                  hover:scale-105 active:scale-95"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  'Create Playlist'
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );
 };
+
+// Add these animations to your global CSS or tailwind.config.js
+const styles = `
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from { 
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to { 
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slideIn {
+  animation: slideIn 0.3s ease-out;
+}
+`;
 
 export default PlaylistSaveModal; 

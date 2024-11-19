@@ -15,11 +15,13 @@ import {
   ArrowLeft,
   Home,
   PlayCircle,
-  Edit2
+  Edit2,
+  BookmarkIcon
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import CreatePlaylistModal from '../components/CreatePlaylistModal';
+import { toast } from 'sonner';
 
 interface Track {
   id: string;
@@ -188,6 +190,8 @@ const Organize = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [playlistToDelete, setPlaylistToDelete] = useState<Playlist | null>(null);
   const [newPlaylist, setNewPlaylist] = useState<{ name: string; id: string } | null>(null);
+  const [userPlaylists, setUserPlaylists] = useState<Playlist[]>([]);
+  const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>([]);
 
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
@@ -197,43 +201,99 @@ const Organize = () => {
       setLoading(true);
       const token = localStorage.getItem('spotify_access_token');
       
-      if (!token || !isAuthenticated) {
-        console.log('Auth state:', { token: !!token, isAuthenticated });
-        return;
-      }
+      if (!token || !isAuthenticated) return;
 
-      const response = await fetch('https://api.spotify.com/v1/me/playlists', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
+      // First fetch user's own playlists
+      const fetchAllPlaylists = async () => {
+        const playlists = [];
+        let url = 'https://api.spotify.com/v1/me/playlists?limit=50';
+        
+        while (url) {
+          const response = await fetch(url, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
 
-      if (!response.ok) {
-        if (response.status === 401) {
-          // Token expired, trigger re-auth
-          localStorage.removeItem('spotify_access_token');
-          navigate('/');
-          return;
+        if (!response.ok) {
+          if (response.status === 401) {
+            localStorage.removeItem('spotify_access_token');
+            navigate('/');
+              return null;
+          }
+          throw new Error('Failed to fetch playlists');
         }
-        throw new Error('Failed to fetch playlists');
-      }
 
-      const data = await response.json();
-      setPlaylists(data.items || []);
-      setFilteredPlaylists(data.items || []);
+        const data = await response.json();
+          playlists.push(...data.items);
+          url = data.next; // Will be null when no more pages
+        }
+        return playlists;
+      };
+
+      // Fetch library playlists (saved/followed)
+      const fetchLibraryPlaylists = async () => {
+        const response = await fetch('https://api.spotify.com/v1/me/tracks?limit=50', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!response.ok) {
+          if (response.status === 403) {
+            // Handle missing scope
+            console.warn('Missing user-library-read scope');
+            return [];
+          }
+          throw new Error('Failed to fetch library playlists');
+        }
+
+        const data = await response.json();
+        return data.items || [];
+      };
+
+      // Execute both fetches
+      const [allPlaylists, libraryPlaylists] = await Promise.all([
+        fetchAllPlaylists(),
+        fetchLibraryPlaylists()
+      ]);
+
+      if (!allPlaylists) return; // Handle auth error case
+
+      // Filter and sort playlists
+      const ownPlaylists = allPlaylists.filter(
+        playlist => playlist.owner.display_name === user?.display_name
+      );
+      
+      const otherPlaylists = allPlaylists.filter(
+        playlist => playlist.owner.display_name !== user?.display_name
+      );
+
+      // Sort by most recently modified
+      const sortByRecent = (a: Playlist, b: Playlist) => {
+        return new Date(b.tracks.href).getTime() - new Date(a.tracks.href).getTime();
+      };
+
+      console.log('Own Playlists:', ownPlaylists.length);
+      console.log('Other Playlists:', otherPlaylists.length);
+
+      setUserPlaylists(ownPlaylists.sort(sortByRecent));
+      setSavedPlaylists(otherPlaylists.sort(sortByRecent));
+      setPlaylists([...ownPlaylists, ...otherPlaylists]);
+      setFilteredPlaylists([...ownPlaylists, ...otherPlaylists]);
+
     } catch (error) {
       console.error('Failed to fetch playlists:', error);
+      toast.error('Failed to load playlists', {
+        description: 'Please try refreshing the page or logging in again'
+      });
     } finally {
       setLoading(false);
     }
   };
 
-  // Only fetch when authenticated and mounted
+  // Add dependency to useEffect
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && user) {
       fetchPlaylists();
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user]);
 
   // Search effect
   useEffect(() => {
@@ -535,51 +595,114 @@ const Organize = () => {
 
         <div className="max-w-[1400px] mx-auto px-6 py-8">
           {viewMode === 'grid' ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {filteredPlaylists?.map((playlist) => {
-                if (!playlist || !playlist.images) return null;
+            <div className="space-y-8">
+              {/* Your Playlists Section */}
+              <section>
+                <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
+                  <Music className="w-6 h-6" />
+                  Your Playlists
+                </h2>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                  {userPlaylists.map((playlist) => {
+                    if (!playlist || !playlist.images) return null;
 
-                const imageUrl = playlist.images?.[0]?.url || '/playlist-placeholder.png';
-                const playlistName = playlist.name || 'Untitled Playlist';
-                const trackCount = playlist.tracks?.total || 0;
+                    const imageUrl = playlist.images?.[0]?.url || '/playlist-placeholder.png';
+                    const playlistName = playlist.name || 'Untitled Playlist';
+                    const trackCount = playlist.tracks?.total || 0;
 
-                return (
-                  <div
-                    key={playlist.id}
-                    className="group relative bg-gray-800/50 rounded-lg overflow-hidden hover:bg-gray-800/70 transition-all duration-300"
-                  >
-                    <div className="relative aspect-square">
-                      <img
-                        src={imageUrl}
-                        alt={playlistName}
-                        className="w-full h-full object-cover"
-                      />
-                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                        <button
-                          onClick={() => fetchPlaylistTracks(playlist.id)}
-                          className="p-2 bg-emerald-500 rounded-full hover:bg-emerald-600 transition-colors"
-                        >
-                          <Music className="w-5 h-5 text-white" />
-                        </button>
-                        <button
-                          onClick={() => setPlaylistToDelete(playlist)}
-                          className="p-2 bg-red-500 rounded-full hover:bg-red-600 transition-colors"
-                        >
-                          <Trash2 className="w-5 h-5 text-white" />
-                        </button>
+                    return (
+                      <div
+                        key={playlist.id}
+                        className="group relative bg-gray-800/50 rounded-lg overflow-hidden hover:bg-gray-800/70 transition-all duration-300"
+                      >
+                        <div className="relative aspect-square">
+                          <img
+                            src={imageUrl}
+                            alt={playlistName}
+                            className="w-full h-full object-cover"
+                          />
+                          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+                            <button
+                              onClick={() => fetchPlaylistTracks(playlist.id)}
+                              className="p-2 bg-emerald-500 rounded-full hover:bg-emerald-600 transition-colors"
+                              title="View Tracks"
+                            >
+                              <Music className="w-5 h-5 text-white" />
+                            </button>
+                            {playlist.owner.display_name === user?.display_name && (
+                              <button
+                                onClick={() => setPlaylistToDelete(playlist)}
+                                className="p-2 bg-red-500 rounded-full hover:bg-red-600 transition-colors"
+                                title="Delete Playlist"
+                              >
+                                <Trash2 className="w-5 h-5 text-white" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div className="p-3">
+                          <h3 className="text-white font-medium text-sm truncate">
+                            {playlistName}
+                          </h3>
+                          <p className="text-gray-400 text-xs">
+                            {trackCount} tracks
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* Saved Playlists Section */}
+              <section>
+                <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
+                  <BookmarkIcon className="w-6 h-6" />
+                  Saved Playlists
+                </h2>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                  {savedPlaylists.map((playlist) => (
+                    <div
+                      key={playlist.id}
+                      className="group relative bg-gray-800/50 rounded-lg overflow-hidden hover:bg-gray-800/70 transition-all duration-300"
+                    >
+                      <div className="relative aspect-square">
+                        <img
+                          src={playlist.images[0]?.url || '/playlist-placeholder.png'}
+                          alt={playlist.name}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+                          <button
+                            onClick={() => fetchPlaylistTracks(playlist.id)}
+                            className="p-2 bg-emerald-500 rounded-full hover:bg-emerald-600 transition-colors"
+                            title="View Tracks"
+                          >
+                            <Music className="w-5 h-5 text-white" />
+                          </button>
+                          {playlist.owner.display_name === user?.display_name && (
+                            <button
+                              onClick={() => setPlaylistToDelete(playlist)}
+                              className="p-2 bg-red-500 rounded-full hover:bg-red-600 transition-colors"
+                              title="Delete Playlist"
+                            >
+                              <Trash2 className="w-5 h-5 text-white" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="p-3">
+                        <h3 className="text-white font-medium text-sm truncate">
+                          {playlist.name}
+                        </h3>
+                        <p className="text-gray-400 text-xs">
+                          {playlist.tracks.total} tracks
+                        </p>
                       </div>
                     </div>
-                    <div className="p-3">
-                      <h3 className="text-white font-medium text-sm truncate">
-                        {playlistName}
-                      </h3>
-                      <p className="text-gray-400 text-xs">
-                        {trackCount} tracks
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
+                  ))}
+                </div>
+              </section>
             </div>
           ) : (
             // Tracks View

@@ -473,6 +473,17 @@ const Dashboard = () => {
     }
   };
 
+  const handleNowPlayingClick = (e: React.MouseEvent) => {
+    // Check if the click target is a button or inside a button
+    const isButton = (e.target as HTMLElement).closest('button');
+    if (!isButton) {
+      setIsTrackModalOpen(true);
+      if (currentlyPlaying?.item) {
+        fetchTrackDetails(currentlyPlaying.item.id);
+      }
+    }
+  };
+
   if (loading || isGenerating) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
@@ -545,12 +556,7 @@ const Dashboard = () => {
         <>
           <div 
             className="mb-12 bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 hover:bg-gray-800/60 transition-colors group cursor-pointer"
-            onClick={() => {
-              setIsTrackModalOpen(true);
-              if (currentlyPlaying.item) {
-                fetchTrackDetails(currentlyPlaying.item.id);
-              }
-            }}
+            onClick={handleNowPlayingClick}
           >
             <h2 className="text-2xl font-bold text-white mb-6">Now Playing</h2>
             <div className="flex items-center gap-6">
