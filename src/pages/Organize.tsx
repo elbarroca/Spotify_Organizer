@@ -600,7 +600,7 @@ const Organize = () => {
               <section>
                 <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
                   <Music className="w-6 h-6" />
-                  Your Playlists
+                  Your Created Playlists
                 </h2>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
                   {userPlaylists.map((playlist) => {

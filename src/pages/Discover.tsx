@@ -47,6 +47,13 @@ interface CachedData<T> {
 }
 
 const ONE_HOUR = 3600000; // 1 hour in milliseconds (3,600,000 ms = 1 hour)
+const POLLING_INTERVAL = 60000; // 1 minute in milliseconds
+const RATE_LIMIT_WINDOW = 300000; // 5 minutes in milliseconds
+const MAX_REQUESTS_PER_WINDOW = 50; // Spotify's rate limit is roughly 1 request per 6 seconds
+
+// Add these constants at the top
+const BACKGROUND_SYNC_KEY = 'last_spotify_sync';
+const BACKGROUND_TRACKS_KEY = 'spotify_tracks_cache';
 
 interface LocationState {
   seedTrack?: Track;
@@ -86,6 +93,11 @@ const Discover = () => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [lastPollingTime, setLastPollingTime] = useState<number>(0);
+  const [requestCount, setRequestCount] = useState<number>(0);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [currentlyPlaying, setCurrentlyPlaying] = useState<Track | null>(null);
+  const currentPlayingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const filteredArtists = topArtists.filter(artist => 
     artist.name.toLowerCase().includes(artistSearch.toLowerCase()) ||
@@ -240,14 +252,82 @@ const Discover = () => {
     }
   };
 
+  // Add this function to handle background sync
+  const syncBackgroundTracks = async () => {
+    if (!token) return;
+
+    try {
+      // Get last sync timestamp
+      const lastSync = localStorage.getItem(BACKGROUND_SYNC_KEY);
+      const now = Date.now();
+      
+      // If we have a last sync time, use it as the 'after' parameter
+      const after = lastSync ? new Date(parseInt(lastSync)).toISOString() : undefined;
+      
+      // Fetch recently played tracks since last sync
+      const response = await fetch(
+        `https://api.spotify.com/v1/me/player/recently-played?limit=50${after ? `&after=${Date.parse(after)}` : ''}`,
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to sync background tracks');
+      }
+
+      const data = await response.json();
+      
+      // Get existing cached tracks
+      const existingCache = localStorage.getItem(BACKGROUND_TRACKS_KEY);
+      const existingTracks: TopTrack[] = existingCache ? JSON.parse(existingCache) : [];
+      
+      // Process new tracks
+      const newTracks = data.items.map((item: any) => ({
+        id: item.track.id,
+        name: item.track.name,
+        artists: item.track.artists,
+        album: item.track.album,
+        preview_url: item.track.preview_url,
+        played_at: new Date(item.played_at).getTime()
+      }));
+
+      // Combine tracks, remove duplicates, and sort by played_at
+      const allTracks = [...newTracks, ...existingTracks]
+        .filter((track, index, self) => 
+          index === self.findIndex(t => t.id === track.id && t.played_at === track.played_at)
+        )
+        .sort((a, b) => (b.played_at || 0) - (a.played_at || 0))
+        .slice(0, 50); // Keep only the most recent 50 tracks
+
+      // Update cache
+      localStorage.setItem(BACKGROUND_TRACKS_KEY, JSON.stringify(allTracks));
+      localStorage.setItem(BACKGROUND_SYNC_KEY, now.toString());
+
+      // Update state
+      setTopTracks(allTracks);
+
+    } catch (error) {
+      console.error('Background sync failed:', error);
+    }
+  };
+
+  // Modify the fetchTopTracks function
   const fetchTopTracks = async () => {
     try {
       if (!token) return;
-      
-      // Get current timestamp in milliseconds for 'before' parameter
-      const currentTimestamp = Date.now();
-      
-      // Fetch last 50 recently played tracks
+      if (!canMakeRequest()) {
+        console.log('Rate limit reached, skipping request');
+        return;
+      }
+
+      setRequestCount(prev => prev + 1);
+      setLastPollingTime(Date.now());
+
+      // Sync background tracks first
+      await syncBackgroundTracks();
+
+      // Then fetch current session tracks
       const recentlyPlayedResponse = await fetch(
         `https://api.spotify.com/v1/me/player/recently-played?limit=50`,
         {
@@ -258,90 +338,45 @@ const Discover = () => {
         }
       );
 
-      // Also fetch user's top tracks
-      const topTracksResponse = await fetch(
-        'https://api.spotify.com/v1/me/top/tracks?limit=50&time_range=short_term',
-        {
-          headers: { 
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
+      if (!recentlyPlayedResponse.ok) {
+        if (recentlyPlayedResponse.status === 429) {
+          const retryAfter = recentlyPlayedResponse.headers.get('Retry-After');
+          throw new Error(`Rate limited. Retry after ${retryAfter} seconds`);
         }
-      );
-
-      if (!recentlyPlayedResponse.ok || !topTracksResponse.ok) {
-        throw new Error('Failed to fetch tracks');
+        throw new Error('Failed to fetch recent tracks');
       }
 
       const recentlyPlayedData = await recentlyPlayedResponse.json();
-      const topTracksData = await topTracksResponse.json();
 
-      // Process recently played tracks with proper timestamp handling
-      const recentTracks = recentlyPlayedData.items.map((item: any) => ({
-        ...item.track,
-        played_at: new Date(item.played_at).getTime(),
-        isRecent: true // Flag to identify recent tracks
+      // Combine with background tracks
+      const backgroundTracks = localStorage.getItem(BACKGROUND_TRACKS_KEY);
+      const cachedTracks: TopTrack[] = backgroundTracks ? JSON.parse(backgroundTracks) : [];
+      
+      const currentTracks = recentlyPlayedData.items.map((item: any) => ({
+        id: item.track.id,
+        name: item.track.name,
+        artists: item.track.artists,
+        album: item.track.album,
+        preview_url: item.track.preview_url,
+        played_at: new Date(item.played_at).getTime()
       }));
 
-      // Sort recent tracks by most recent first
-      recentTracks.sort((a: any, b: any) => b.played_at - a.played_at);
+      // Combine and deduplicate tracks
+      const allTracks = [...currentTracks, ...cachedTracks]
+        .filter((track, index, self) => 
+          index === self.findIndex(t => t.id === track.id && t.played_at === track.played_at)
+        )
+        .sort((a, b) => (b.played_at || 0) - (a.played_at || 0))
+        .slice(0, 50);
 
-      // Process top tracks
-      const topTracks = topTracksData.items.map((track: any) => ({
-        ...track,
-        isTop: true // Flag to identify top tracks
-      }));
-
-      // Combine tracks with priority
-      const seenIds = new Set();
-      const uniqueTracks: TopTrack[] = [];
-
-      // First add recent tracks
-      for (const track of recentTracks) {
-        if (!seenIds.has(track.id)) {
-          seenIds.add(track.id);
-          uniqueTracks.push({
-            id: track.id,
-            name: track.name,
-            artists: track.artists,
-            album: track.album,
-            preview_url: track.preview_url,
-            played_at: track.played_at // Keep timestamp for recent tracks
-          });
-        }
-      }
-
-      // Then add top tracks if we have space
-      for (const track of topTracks) {
-        if (!seenIds.has(track.id) && uniqueTracks.length < 50) {
-          seenIds.add(track.id);
-          uniqueTracks.push({
-            id: track.id,
-            name: track.name,
-            artists: track.artists,
-            album: track.album,
-            preview_url: track.preview_url
-          });
-        }
-      }
-
-      // Update cache with timestamp
-      const cacheData: CachedData<TopTrack[]> = {
-        timestamp: currentTimestamp,
-        data: uniqueTracks.slice(0, 50)
-      };
-
-      localStorage.setItem('cached_top_tracks', JSON.stringify(cacheData));
-      setTopTracks(uniqueTracks.slice(0, 50));
-
-      // Log for verification
-      console.log(`Fetched ${recentTracks.length} recent tracks and ${topTracks.length} top tracks`);
-      console.log(`Combined into ${uniqueTracks.length} unique tracks`);
+      setTopTracks(allTracks);
 
     } catch (error) {
       console.error('Failed to fetch tracks:', error);
-      if (error instanceof Error && error.message.includes('401')) {
-        window.location.href = '/login';
+      // Use cached tracks if available
+      const cachedTracks = localStorage.getItem(BACKGROUND_TRACKS_KEY);
+      if (cachedTracks) {
+        setTopTracks(JSON.parse(cachedTracks));
       }
     }
   };
@@ -892,21 +927,35 @@ const Discover = () => {
 
   const updateRecentTracks = (newTrack: Track) => {
     setTopTracks(prevTracks => {
-      // Create new track with current timestamp
+      const now = Date.now();
+      
       const trackWithTimestamp: TopTrack = {
         id: newTrack.id,
         name: newTrack.name,
         artists: newTrack.artists,
         album: newTrack.album,
-        preview_url: newTrack.preview_url || undefined, // Convert null to undefined
-        played_at: Date.now()
+        preview_url: newTrack.preview_url || undefined,
+        played_at: now
       };
 
-      // Remove any existing instance of this track
-      const filteredTracks = prevTracks.filter(t => t.id !== newTrack.id);
+      // Remove any existing instance of this track that's less than 30 seconds old
+      const recentThreshold = now - 30000; // 30 seconds
+      const filteredTracks = prevTracks.filter(t => 
+        t.id !== newTrack.id || 
+        (t.played_at && t.played_at < recentThreshold)
+      );
 
       // Add the new track at the beginning
-      return [trackWithTimestamp, ...filteredTracks].slice(0, 50);
+      const updatedTracks = [trackWithTimestamp, ...filteredTracks].slice(0, 50);
+
+      // Update cache
+      const cacheData = {
+        timestamp: now,
+        data: updatedTracks
+      };
+      localStorage.setItem('cached_recent_tracks', JSON.stringify(cacheData));
+
+      return updatedTracks;
     });
   };
 
@@ -954,6 +1003,128 @@ const Discover = () => {
     }
   }
   `;
+
+  // Add this function to handle rate limiting
+  const canMakeRequest = () => {
+    const now = Date.now();
+    if (now - lastPollingTime >= RATE_LIMIT_WINDOW) {
+      setRequestCount(0);
+      return true;
+    }
+    return requestCount < MAX_REQUESTS_PER_WINDOW;
+  };
+
+  // Add this new function to fetch currently playing track
+  const fetchCurrentlyPlaying = async () => {
+    if (!token || !canMakeRequest()) return;
+
+    try {
+      const response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      // If no track is playing (204 status), clear current track
+      if (response.status === 204) {
+        setCurrentlyPlaying(null);
+        return;
+      }
+
+      if (!response.ok) {
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('Retry-After');
+          throw new Error(`Rate limited. Retry after ${retryAfter} seconds`);
+        }
+        throw new Error('Failed to fetch currently playing track');
+      }
+
+      const data = await response.json();
+      
+      // Only update if there's actually a track playing
+      if (data.is_playing && data.item) {
+        // If it's a new track (different from current)
+        if (!currentlyPlaying || currentlyPlaying.id !== data.item.id) {
+          setCurrentlyPlaying(data.item);
+          // Update recent tracks with the new track
+          updateRecentTracks(data.item);
+        }
+      } else {
+        setCurrentlyPlaying(null);
+      }
+    } catch (error) {
+      console.error('Failed to fetch currently playing:', error);
+    }
+  };
+
+  // Modify the existing useEffect for polling to include currently playing checks
+  useEffect(() => {
+    // Initial fetches
+    fetchTopTracks();
+    fetchCurrentlyPlaying();
+
+    // Set up polling for both recent tracks and currently playing
+    pollingIntervalRef.current = setInterval(() => {
+      fetchTopTracks();
+    }, POLLING_INTERVAL);
+
+    // Poll currently playing more frequently (every 5 seconds)
+    currentPlayingIntervalRef.current = setInterval(() => {
+      fetchCurrentlyPlaying();
+    }, 5000); // 5 seconds
+
+    // Cleanup
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+      if (currentPlayingIntervalRef.current) {
+        clearInterval(currentPlayingIntervalRef.current);
+      }
+    };
+  }, [token]);
+
+  // Update the visibility change handler to include currently playing
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Clear all polling when tab is hidden
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+        }
+        if (currentPlayingIntervalRef.current) {
+          clearInterval(currentPlayingIntervalRef.current);
+        }
+      } else {
+        // Resume all polling when tab is visible
+        fetchTopTracks();
+        fetchCurrentlyPlaying();
+        
+        pollingIntervalRef.current = setInterval(() => {
+          fetchTopTracks();
+        }, POLLING_INTERVAL);
+        
+        currentPlayingIntervalRef.current = setInterval(() => {
+          fetchCurrentlyPlaying();
+        }, 5000);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  // Add this effect to sync on app load
+  useEffect(() => {
+    const syncOnLoad = async () => {
+      if (token) {
+        await syncBackgroundTracks();
+      }
+    };
+
+    syncOnLoad();
+  }, [token]);
 
   if (loading) {
     return (
@@ -1321,7 +1492,7 @@ const Discover = () => {
                       <button 
                         onClick={(e) => {
                           e.stopPropagation(); // Prevent track selection when clicking play
-                          handlePreviewPlay(e, track.preview_url, track);
+                          handlePreviewPlay(e, track.preview_url || null, track);
                         }}
                         className="absolute inset-0 flex items-center justify-center bg-black/60 
                           opacity-0 group-hover:opacity-100 transition-opacity rounded"

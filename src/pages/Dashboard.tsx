@@ -676,7 +676,7 @@ const Dashboard = () => {
                     handleGetSimilarSongs();
                     setIsTrackModalOpen(false);
                   }}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-purple-500 hover:bg-purple-600 text-white rounded-full transition-colors"
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-full transition-colors"
                 >
                   <ListMusic className="w-5 h-5" />
                   Get Similar Songs
