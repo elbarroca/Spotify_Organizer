@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Button } from '@/components/ui/Button'
+import Button from '@/components/Button'
 import { useSpotify } from '@/hooks/useSpotify'
 import type { OrganizeCriteria } from '@/types/spotify'
 
@@ -29,7 +29,7 @@ export default function PlaylistCreator() {
       <div className="flex flex-col space-y-4">
         <select
           value={criteria.type}
-          onChange={(e) => setCriteria(prev => ({ ...prev, type: e.target.value }))}
+          onChange={(e) => setCriteria(prev => ({ ...prev, type: e.target.value as OrganizeCriteria['type'] }))}
           className="bg-zinc-800 text-white p-2 rounded"
         >
           <option value="genre">Genre</option>

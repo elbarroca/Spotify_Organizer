@@ -203,60 +203,39 @@ const Organize = () => {
       
       if (!token || !isAuthenticated) return;
 
-      // First fetch user's own playlists
-      const fetchAllPlaylists = async () => {
-        const playlists = [];
-        let url = 'https://api.spotify.com/v1/me/playlists?limit=50';
-        
-        while (url) {
-          const response = await fetch(url, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+      // Fetch all user playlists with pagination
+      const getAllPlaylists = async () => {
+        let allPlaylists: Playlist[] = [];
+        let nextUrl = 'https://api.spotify.com/v1/me/playlists?limit=50'; // Increased limit to 50
 
-        if (!response.ok) {
-          if (response.status === 401) {
-            localStorage.removeItem('spotify_access_token');
-            navigate('/');
+        while (nextUrl) {
+          const response = await fetch(nextUrl, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+
+          if (!response.ok) {
+            if (response.status === 401) {
+              localStorage.removeItem('spotify_access_token');
+              navigate('/');
               return null;
+            }
+            throw new Error('Failed to fetch playlists');
           }
-          throw new Error('Failed to fetch playlists');
+
+          const data = await response.json();
+          allPlaylists = [...allPlaylists, ...data.items];
+          nextUrl = data.next; // Will be null when no more pages
         }
 
-        const data = await response.json();
-          playlists.push(...data.items);
-          url = data.next; // Will be null when no more pages
-        }
-        return playlists;
+        return allPlaylists;
       };
 
-      // Fetch library playlists (saved/followed)
-      const fetchLibraryPlaylists = async () => {
-        const response = await fetch('https://api.spotify.com/v1/me/tracks?limit=50', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+      // Fetch all playlists
+      const allPlaylists = await getAllPlaylists();
+      
+      if (!allPlaylists) return;
 
-        if (!response.ok) {
-          if (response.status === 403) {
-            // Handle missing scope
-            console.warn('Missing user-library-read scope');
-            return [];
-          }
-          throw new Error('Failed to fetch library playlists');
-        }
-
-        const data = await response.json();
-        return data.items || [];
-      };
-
-      // Execute both fetches
-      const [allPlaylists, libraryPlaylists] = await Promise.all([
-        fetchAllPlaylists(),
-        fetchLibraryPlaylists()
-      ]);
-
-      if (!allPlaylists) return; // Handle auth error case
-
-      // Filter and sort playlists
+      // Filter user's own playlists and saved playlists
       const ownPlaylists = allPlaylists.filter(
         playlist => playlist.owner.display_name === user?.display_name
       );
@@ -270,13 +249,15 @@ const Organize = () => {
         return new Date(b.tracks.href).getTime() - new Date(a.tracks.href).getTime();
       };
 
-      console.log('Own Playlists:', ownPlaylists.length);
-      console.log('Other Playlists:', otherPlaylists.length);
-
       setUserPlaylists(ownPlaylists.sort(sortByRecent));
       setSavedPlaylists(otherPlaylists.sort(sortByRecent));
       setPlaylists([...ownPlaylists, ...otherPlaylists]);
       setFilteredPlaylists([...ownPlaylists, ...otherPlaylists]);
+
+      // Log counts for verification
+      console.log('Total playlists fetched:', allPlaylists.length);
+      console.log('User created playlists:', ownPlaylists.length);
+      console.log('Saved/followed playlists:', otherPlaylists.length);
 
     } catch (error) {
       console.error('Failed to fetch playlists:', error);
@@ -520,6 +501,13 @@ const Organize = () => {
     console.log('Loading:', loading);
   }, [playlists, filteredPlaylists, loading]);
 
+  const LoadingState = () => (
+    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex flex-col items-center justify-center">
+      <Loader2 className="w-8 h-8 text-emerald-500 animate-spin mb-4" />
+      <p className="text-gray-400">Loading your playlists...</p>
+    </div>
+  );
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
@@ -531,11 +519,7 @@ const Organize = () => {
   }
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
-        <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
-      </div>
-    );
+    return <LoadingState />;
   }
 
   if (!playlists.length) {
@@ -589,6 +573,13 @@ const Organize = () => {
                   className="bg-gray-800/50 text-white pl-10 pr-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 w-64"
                 />
               </div>
+              <button
+                onClick={() => fetchPlaylists()}
+                className="p-2 text-gray-400 hover:text-white transition-colors"
+                title="Refresh playlists"
+              >
+                <RefreshCw className="w-5 h-5" />
+              </button>
             </div>
           </div>
         </header>

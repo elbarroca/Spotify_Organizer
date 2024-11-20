@@ -6,6 +6,12 @@ const spotifyApi = new SpotifyWebApi({
   redirectUri: import.meta.env.VITE_REDIRECT_URI
 });
 
+interface SpotifyUser {
+  id: string;
+  display_name: string | null;
+  images: { url: string }[];
+}
+
 interface User {
   id: string;
   display_name: string;
@@ -21,6 +27,7 @@ interface AuthContextType {
   logout: () => void;
   checkAuth: () => Promise<void>;
   spotifyApi: SpotifyWebApi;
+  refreshAuth: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -34,15 +41,25 @@ export const useAuth = () => {
 };
 
 const SPOTIFY_SCOPES = [
-  'user-read-private',
-  'user-read-email',
-  'playlist-modify-public',
+  'ugc-image-upload',
+  'user-read-playback-state',
+  'user-modify-playback-state', 
+  'user-read-currently-playing',
+  'app-remote-control',
+  'streaming',
+  'playlist-read-private',
+  'playlist-read-collaborative',
   'playlist-modify-private',
+  'playlist-modify-public',
+  'user-follow-modify',
+  'user-follow-read',
+  'user-read-playback-position',
   'user-top-read',
   'user-read-recently-played',
-  'user-read-playback-state',
-  'user-modify-playback-state',
-  'user-read-currently-playing'
+  'user-library-modify',
+  'user-library-read',
+  'user-read-email',
+  'user-read-private'
 ].join(' ');
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -52,21 +69,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [token, setToken] = useState<string | null>(null);
 
   const login = useCallback(() => {
-    const state = Math.random().toString(36).substring(7);
-    localStorage.setItem('spotify_auth_state', state);
+    const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
+    const redirectUri = `${window.location.origin}/callback`;
     
-    const authUrl = new URL('https://accounts.spotify.com/authorize');
-    const params = {
-      client_id: import.meta.env.VITE_SPOTIFY_CLIENT_ID,
-      response_type: 'token',
-      redirect_uri: import.meta.env.VITE_REDIRECT_URI,
-      state,
-      scope: SPOTIFY_SCOPES,
-      show_dialog: 'true'
-    };
+    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}`;
     
-    authUrl.search = new URLSearchParams(params).toString();
-    window.location.href = authUrl.toString();
+    window.location.href = authUrl;
   }, []);
 
   const logout = useCallback(() => {
@@ -93,7 +101,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setToken(storedToken);
 
       const response = await spotifyApi.getMe();
-      setUser(response.body);
+      const spotifyUser = response.body as SpotifyUser;
+      
+      const userData: User = {
+        id: spotifyUser.id,
+        display_name: spotifyUser.display_name || 'User',
+        images: spotifyUser.images
+      };
+      
+      setUser(userData);
       setIsAuthenticated(true);
     } catch (error) {
       console.error('Auth check failed:', error);
@@ -104,6 +120,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const refreshAuth = useCallback(() => {
+    const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
+    const redirectUri = `${window.location.origin}/callback`;
+    const state = Math.random().toString(36).substring(7);
+    
+    localStorage.setItem('spotify_auth_state', state);
+    localStorage.setItem('spotify_auth_redirect', window.location.pathname);
+    
+    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}`;
+    
+    window.location.href = authUrl;
   }, []);
 
   useEffect(() => {
@@ -118,7 +147,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     login,
     logout,
     checkAuth,
-    spotifyApi
+    spotifyApi,
+    refreshAuth
   };
 
   return (

@@ -69,7 +69,7 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [savingPlaylist, setSavingPlaylist] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(true);
-  const { user, token } = useAuth();
+  const { user, token, refreshAuth } = useAuth();
   const navigate = useNavigate();
   const [currentlyPlaying, setCurrentlyPlaying] = useState<CurrentlyPlaying | null>(null);
   const [isTrackModalOpen, setIsTrackModalOpen] = useState(false);
@@ -79,37 +79,62 @@ const Dashboard = () => {
   }>({});
 
   useEffect(() => {
-    generatePersonalizedPlaylists();
-  }, []);
+    if (token) {
+      generatePersonalizedPlaylists();
+    }
+  }, [token]);
 
   const fetchCurrentlyPlaying = async () => {
     try {
       if (!token) return;
 
-      const response = await fetch('https://api.spotify.com/v1/me/player', {
+      // First, try to get the currently playing track
+      const response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
         headers: { 
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
       });
       
+      // If no track is playing (204) or other error, try to get the playback state
       if (response.status === 204) {
-        // No track currently playing
+        const playerResponse = await fetch('https://api.spotify.com/v1/me/player', {
+          headers: { 
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+        });
+
+        if (playerResponse.ok) {
+          const playerData = await playerResponse.json();
+          if (playerData && playerData.item) {
+            setCurrentlyPlaying({
+              item: playerData.item,
+              is_playing: playerData.is_playing,
+              progress_ms: playerData.progress_ms
+            });
+            return;
+          }
+        }
+        
         setCurrentlyPlaying(null);
         return;
       }
 
       if (response.ok) {
         const data = await response.json();
-        setCurrentlyPlaying({
-          item: data.item,
-          is_playing: data.is_playing,
-          progress_ms: data.progress_ms
-        });
+        if (data && data.item) {
+          setCurrentlyPlaying({
+            item: data.item,
+            is_playing: data.is_playing,
+            progress_ms: data.progress_ms
+          });
+        }
       } else if (response.status === 401) {
         // Token expired or invalid
-        localStorage.removeItem('spotify_access_token');
-        window.location.href = '/login';
+        refreshAuth();
+      } else {
+        console.error('Failed to fetch currently playing:', response.status, response.statusText);
       }
     } catch (error) {
       console.error('Failed to fetch currently playing:', error);
@@ -118,21 +143,40 @@ const Dashboard = () => {
 
   useEffect(() => {
     fetchCurrentlyPlaying();
-    const interval = setInterval(fetchCurrentlyPlaying, 1000);
+    const interval = setInterval(fetchCurrentlyPlaying, 500); // Check every 500ms
     return () => clearInterval(interval);
-  }, []);
+  }, [token]); // Add token as dependency
 
   const generatePersonalizedPlaylists = async () => {
     try {
       setIsGenerating(true);
-      if (!token) return;
+      if (!token) {
+        toast.error('Authentication required');
+        navigate('/login');
+        return;
+      }
 
       // 1. Fetch user's liked tracks
       const tracksResponse = await fetch('https://api.spotify.com/v1/me/tracks?limit=50', {
         headers: { Authorization: `Bearer ${token}` },
       });
       
-      if (!tracksResponse.ok) throw new Error('Failed to fetch tracks');
+      if (tracksResponse.status === 401 || tracksResponse.status === 403) {
+        // Token expired or insufficient permissions
+        toast.error(
+          tracksResponse.status === 401 
+            ? 'Session expired. Please login again.'
+            : 'Additional permissions required. Refreshing authentication...'
+        );
+        
+        // Use the new refreshAuth method from context
+        refreshAuth();
+        return;
+      }
+      
+      if (!tracksResponse.ok) {
+        throw new Error(`Failed to fetch tracks: ${tracksResponse.statusText}`);
+      }
       
       const tracksData = await tracksResponse.json();
       const tracks: TrackWithFeatures[] = tracksData.items.map((item: any) => ({
@@ -193,6 +237,9 @@ const Dashboard = () => {
       setAutoPlaylists(generatedPlaylists);
     } catch (error) {
       console.error('Failed to generate playlists:', error);
+      toast.error('Failed to generate playlists', {
+        description: error instanceof Error ? error.message : 'Please try again later'
+      });
     } finally {
       setIsGenerating(false);
       setLoading(false);
@@ -218,7 +265,7 @@ const Dashboard = () => {
   const saveToSpotify = async (playlist: AutoPlaylist) => {
     try {
       setSavingPlaylist(playlist.id);
-      const token = localStorage.getItem('spotify_access_token');
+      toast.loading('Creating your playlist...', { id: 'save-playlist' });
       
       // Create playlist
       const createResponse = await fetch(`https://api.spotify.com/v1/users/${user?.id}/playlists`, {
@@ -256,12 +303,31 @@ const Dashboard = () => {
         throw new Error('Failed to add tracks to playlist');
       }
 
-      // Show success state
-      alert('Playlist created successfully!');
+      // Show success toast
+      toast.dismiss('save-playlist');
+      toast.success('Playlist Created!', {
+        description: (
+          <div className="space-y-2">
+            <p className="font-medium">{playlist.name}</p>
+            <p className="text-sm text-gray-400">{playlist.tracks.length} tracks added</p>
+            <a 
+              href={`https://open.spotify.com/playlist/${newPlaylist.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block mt-2 text-emerald-500 hover:text-emerald-400 transition-colors"
+            >
+              Open in Spotify →
+            </a>
+          </div>
+        ),
+        duration: 5000,
+      });
 
     } catch (error) {
-      console.error('Failed to save playlist:', error);
-      alert('Failed to create playlist. Please try again.');
+      toast.dismiss('save-playlist');
+      toast.error('Failed to Create Playlist', {
+        description: 'Please try again later',
+      });
     } finally {
       setSavingPlaylist(null);
     }
@@ -269,76 +335,85 @@ const Dashboard = () => {
 
   const handlePlayPause = async () => {
     try {
-      const token = localStorage.getItem('spotify_access_token');
-      const method = currentlyPlaying?.is_playing ? 'PUT' : 'PUT';
-      const endpoint = currentlyPlaying?.is_playing ? 'pause' : 'play';
+      if (!token) return;
       
+      const endpoint = currentlyPlaying?.is_playing ? 'pause' : 'play';
       const response = await fetch(
         `https://api.spotify.com/v1/me/player/${endpoint}`,
         {
-          method,
+          method: 'PUT',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
           },
         }
       );
 
-      if (response.ok) {
-        setCurrentlyPlaying(prev => prev ? {
-          ...prev,
-          is_playing: !prev.is_playing
-        } : null);
-        
+      if (response.ok || response.status === 204) {
         await fetchCurrentlyPlaying();
+      } else if (response.status === 401) {
+        refreshAuth();
+      } else {
+        console.error('Failed to toggle playback:', response.status, response.statusText);
+        toast.error('Failed to control playback. Make sure Spotify is active.');
       }
     } catch (error) {
       console.error('Failed to toggle playback:', error);
+      toast.error('Failed to control playback');
     }
   };
 
   const handleSkipNext = async () => {
     try {
-      const token = localStorage.getItem('spotify_access_token');
+      if (!token) return;
+      
       const response = await fetch(
         'https://api.spotify.com/v1/me/player/next',
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
           },
         }
       );
 
-      if (response.ok) {
-        setTimeout(() => {
-          fetchCurrentlyPlaying();
-        }, 300);
+      if (response.ok || response.status === 204) {
+        // Wait a bit for Spotify to update
+        setTimeout(fetchCurrentlyPlaying, 100);
+      } else if (response.status === 401) {
+        refreshAuth();
       }
     } catch (error) {
       console.error('Failed to skip track:', error);
+      toast.error('Failed to skip track');
     }
   };
 
   const handleSkipPrevious = async () => {
     try {
-      const token = localStorage.getItem('spotify_access_token');
+      if (!token) return;
+      
       const response = await fetch(
         'https://api.spotify.com/v1/me/player/previous',
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
           },
         }
       );
 
-      if (response.ok) {
-        setTimeout(() => {
-          fetchCurrentlyPlaying();
-        }, 300);
+      if (response.ok || response.status === 204) {
+        // Wait a bit for Spotify to update
+        setTimeout(fetchCurrentlyPlaying, 100);
+      } else if (response.status === 401) {
+        refreshAuth();
       }
     } catch (error) {
       console.error('Failed to skip to previous track:', error);
+      toast.error('Failed to skip to previous track');
     }
   };
 
@@ -371,7 +446,9 @@ const Dashboard = () => {
     if (!currentlyPlaying?.item) return;
     
     try {
-      // First check if the track is already liked
+      // Show loading toast
+      toast.loading('Adding to your Liked Songs...', { id: 'like-song' });
+
       const checkResponse = await fetch(
         `https://api.spotify.com/v1/me/tracks/contains?ids=${currentlyPlaying.item.id}`,
         {
@@ -382,7 +459,11 @@ const Dashboard = () => {
       const [isLiked] = await checkResponse.json();
 
       if (isLiked) {
-        toast.info('This track is already in your Liked Songs!');
+        toast.dismiss('like-song');
+        toast('Already in Your Library', {
+          icon: '💚',
+          description: 'This track is already in your Liked Songs!',
+        });
         return;
       }
 
@@ -401,16 +482,31 @@ const Dashboard = () => {
       );
 
       if (response.ok) {
-        toast.success('Added to your Liked Songs!', {
-          description: `${currentlyPlaying.item.name} by ${currentlyPlaying.item.artists[0].name} has been added to your library`,
+        toast.dismiss('like-song');
+        toast.success('Added to Your Library', {
+          icon: '🎵',
+          description: (
+            <div className="flex items-center gap-3">
+              <img 
+                src={currentlyPlaying.item.album.images[0]?.url} 
+                alt="" 
+                className="w-10 h-10 rounded"
+              />
+              <div>
+                <p className="font-medium">{currentlyPlaying.item.name}</p>
+                <p className="text-sm text-gray-400">{currentlyPlaying.item.artists[0].name}</p>
+              </div>
+            </div>
+          ),
+          duration: 4000,
         });
         setIsTrackModalOpen(false);
       } else {
         throw new Error('Failed to add to liked songs');
       }
     } catch (error) {
-      console.error('Failed to add to liked songs:', error);
-      toast.error('Failed to add to Liked Songs', {
+      toast.dismiss('like-song');
+      toast.error('Failed to Add to Library', {
         description: 'Please try again later',
       });
     }
@@ -421,8 +517,27 @@ const Dashboard = () => {
     setIsTrackModalOpen(false);
     
     try {
-      // Show loading toast
-      toast.loading('Finding similar songs...', { id: 'similar-songs' });
+      // Enhanced loading toast with animation
+      toast.loading(
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <img 
+              src={currentlyPlaying.item.album.images[0]?.url} 
+              alt="" 
+              className="w-12 h-12 rounded-lg shadow-md"
+            />
+            <div className="absolute inset-0 bg-emerald-500/20 rounded-lg animate-pulse" />
+          </div>
+          <div>
+            <p className="font-semibold text-white">Finding Similar Tracks</p>
+            <p className="text-sm text-gray-400">Analyzing "{currentlyPlaying.item.name}"</p>
+          </div>
+          <div className="ml-auto">
+            <div className="w-5 h-5 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        </div>,
+        { id: 'similar-songs', duration: 10000 }
+      );
 
       // Get audio features of current track
       const featuresResponse = await fetch(
@@ -452,8 +567,29 @@ const Dashboard = () => {
       
       const data = await response.json();
 
-      // Dismiss loading toast
+      // Enhanced success toast
       toast.dismiss('similar-songs');
+      toast.success(
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <img 
+              src={currentlyPlaying.item.album.images[0]?.url} 
+              alt="" 
+              className="w-12 h-12 rounded-lg shadow-md"
+            />
+            <div className="absolute bottom-0 right-0 bg-emerald-500 rounded-full p-1">
+              <ListMusic className="w-3 h-3 text-white" />
+            </div>
+          </div>
+          <div>
+            <p className="font-semibold text-white">Found Similar Tracks!</p>
+            <p className="text-sm text-gray-400">
+              {data.tracks.length} tracks discovered based on your selection
+            </p>
+          </div>
+        </div>,
+        { duration: 3000 }
+      );
       
       // Navigate to discover page with recommendations
       navigate('/discover', { 
@@ -466,10 +602,18 @@ const Dashboard = () => {
         } 
       });
     } catch (error) {
-      console.error('Failed to get recommendations:', error);
-      toast.error('Failed to get similar songs', {
-        description: 'Please try again later',
-      });
+      toast.dismiss('similar-songs');
+      toast.error(
+        <div className="flex items-center gap-4">
+          <div className="bg-red-500/10 p-3 rounded-lg">
+            <X className="w-6 h-6 text-red-500" />
+          </div>
+          <div>
+            <p className="font-semibold text-white">Failed to Find Similar Tracks</p>
+            <p className="text-sm text-gray-400">Please try again later</p>
+          </div>
+        </div>
+      );
     }
   };
 
@@ -494,6 +638,8 @@ const Dashboard = () => {
       </div>
     );
   }
+
+  console.log('Currently Playing:', currentlyPlaying);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black p-8">
@@ -552,14 +698,16 @@ const Dashboard = () => {
         </button>
       </div>
 
+      {/* Now Playing Section */}
       {currentlyPlaying?.item && (
-        <>
+        <div className="mb-12">
           <div 
-            className="mb-12 bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 hover:bg-gray-800/60 transition-colors group cursor-pointer"
+            className="bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 hover:bg-gray-800/60 transition-colors group cursor-pointer"
             onClick={handleNowPlayingClick}
           >
             <h2 className="text-2xl font-bold text-white mb-6">Now Playing</h2>
             <div className="flex items-center gap-6">
+              {/* Album Art */}
               <div className="relative">
                 <img 
                   src={currentlyPlaying.item.album.images[0]?.url}
@@ -568,6 +716,8 @@ const Dashboard = () => {
                 />
                 <div className="absolute inset-0 bg-black/20 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
+
+              {/* Track Info */}
               <div className="flex-1">
                 <h3 className="text-xl font-semibold text-white group-hover:text-emerald-500 transition-colors">
                   {currentlyPlaying.item.name}
@@ -576,15 +726,24 @@ const Dashboard = () => {
                   {currentlyPlaying.item.artists.map(a => a.name).join(', ')}
                 </p>
               </div>
+
+              {/* Playback Controls */}
               <div className="flex items-center gap-4">
                 <button 
-                  onClick={handleSkipPrevious}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSkipPrevious();
+                  }}
                   className="p-2 rounded-full hover:bg-white/10 transition-colors"
                 >
                   <SkipBack className="w-6 h-6 text-white" />
                 </button>
+                
                 <button 
-                  onClick={handlePlayPause}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handlePlayPause();
+                  }}
                   className="p-3 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white hover:scale-105 transition-all"
                 >
                   {currentlyPlaying.is_playing ? (
@@ -593,8 +752,12 @@ const Dashboard = () => {
                     <Play className="w-6 h-6" />
                   )}
                 </button>
+                
                 <button 
-                  onClick={handleSkipNext}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSkipNext();
+                  }}
                   className="p-2 rounded-full hover:bg-white/10 transition-colors"
                 >
                   <SkipForward className="w-6 h-6 text-white" />
@@ -614,80 +777,24 @@ const Dashboard = () => {
               </div>
             </div>
           </div>
-
-          <Dialog open={isTrackModalOpen} onOpenChange={setIsTrackModalOpen}>
-            <DialogOverlay className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50" />
-            <DialogContent className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-2xl bg-gray-900 rounded-xl p-6 shadow-xl z-50">
-              <div className="flex justify-between items-start mb-6">
-                <h2 className="text-2xl font-bold text-white">Track Details</h2>
-                <button 
-                  onClick={() => setIsTrackModalOpen(false)}
-                  className="p-2 hover:bg-white/10 rounded-full transition-colors"
-                >
-                  <X className="w-6 h-6 text-gray-400" />
-                </button>
-              </div>
-
-              <div className="flex gap-6 mb-6">
-                <img 
-                  src={currentlyPlaying.item.album.images[0]?.url}
-                  alt={currentlyPlaying.item.name}
-                  className="w-40 h-40 rounded-lg shadow-lg"
-                />
-                <div>
-                  <h3 className="text-2xl font-bold text-white mb-2">
-                    {currentlyPlaying.item.name}
-                  </h3>
-                  <p className="text-lg text-gray-300 mb-4">
-                    {currentlyPlaying.item.artists.map(a => a.name).join(', ')}
-                  </p>
-                  <p className="text-gray-400">
-                    Album: {currentlyPlaying.item.album.name}
-                  </p>
-                </div>
-              </div>
-
-              {trackDetails.audioFeatures && (
-                <div className="grid grid-cols-2 gap-4 mb-6">
-                  <div className="bg-gray-800/50 p-4 rounded-lg">
-                    <h4 className="text-sm font-medium text-gray-400 mb-2">Energy</h4>
-                    <div className="h-2 bg-gray-700 rounded-full">
-                      <div 
-                        className="h-full bg-emerald-500 rounded-full"
-                        style={{ width: `${trackDetails.audioFeatures.energy * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                  <div className="bg-gray-800/50 p-4 rounded-lg">
-                    <h4 className="text-sm font-medium text-gray-400 mb-2">Danceability</h4>
-                    <div className="h-2 bg-gray-700 rounded-full">
-                      <div 
-                        className="h-full bg-emerald-500 rounded-full"
-                        style={{ width: `${trackDetails.audioFeatures.danceability * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-4">
-                <button
-                  onClick={() => {
-                    handleGetSimilarSongs();
-                    setIsTrackModalOpen(false);
-                  }}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-emerald-500 hover:bg-emerald-600 text-white rounded-full transition-colors"
-                >
-                  <ListMusic className="w-5 h-5" />
-                  Get Similar Songs
-                </button>
-              </div>
-            </DialogContent>
-          </Dialog>
-        </>
+        </div>
       )}
 
-      {/* Auto-generated Playlists */}
+      {!currentlyPlaying && (
+        <div className="mb-12 bg-gray-800/50 backdrop-blur-sm rounded-xl p-6">
+          <h2 className="text-2xl font-bold text-white mb-2">Playback Status</h2>
+          <p className="text-gray-400">
+            No track currently playing. Make sure:
+          </p>
+          <ul className="list-disc list-inside text-gray-400 mt-2">
+            <li>Spotify is open and playing music</li>
+            <li>You're using the same Spotify account</li>
+            <li>Your device is active and online</li>
+          </ul>
+        </div>
+      )}
+
+      {/* Recently Generated Playlists */}
       <h2 className="text-2xl font-bold text-white mb-6">Recently Generated Playlists</h2>
       <div className="grid md:grid-cols-3 gap-8">
         {autoPlaylists.map((playlist) => (
@@ -755,6 +862,163 @@ const Dashboard = () => {
           </div>
         ))}
       </div>
+
+      {/* Track Details Modal */}
+      <Dialog open={isTrackModalOpen} onOpenChange={setIsTrackModalOpen}>
+        <DialogOverlay className="fixed inset-0 bg-black/80 backdrop-blur-lg z-50" />
+        <DialogContent className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-3xl max-h-[90vh] bg-gradient-to-br from-gray-900 via-gray-900/95 to-gray-800/90 rounded-2xl shadow-2xl z-50 border border-white/10 overflow-hidden">
+          <div className="overflow-y-auto max-h-[90vh] custom-scrollbar">
+            <div className="p-10">
+              <div className="animate-in slide-in-from-bottom duration-300">
+                {currentlyPlaying?.item && (
+                  <>
+                    {/* Enhanced Header */}
+                    <div className="flex justify-between items-center mb-8">
+                      <div>
+                        <h2 className="text-3xl font-bold bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent mb-2">
+                          Track Analysis
+                        </h2>
+                        <p className="text-gray-400">Discover the musical characteristics</p>
+                      </div>
+                      <button 
+                        onClick={() => setIsTrackModalOpen(false)}
+                        className="p-2 hover:bg-white/10 rounded-full transition-all duration-200 hover:rotate-90"
+                      >
+                        <X className="w-6 h-6 text-gray-400" />
+                      </button>
+                    </div>
+
+                    {/* Enhanced Track Info Section */}
+                    <div className="flex gap-8 mb-8 p-6 bg-white/5 rounded-xl backdrop-blur-sm border border-white/10">
+                      <div className="relative group">
+                        <img 
+                          src={currentlyPlaying.item.album.images[0]?.url}
+                          alt={currentlyPlaying.item.album.name}
+                          className="w-48 h-48 rounded-lg shadow-xl transition-transform duration-300 group-hover:scale-105"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="text-3xl font-bold text-white mb-3 line-clamp-2">
+                          {currentlyPlaying.item.name}
+                        </h3>
+                        <p className="text-xl text-gray-300 mb-4">
+                          {currentlyPlaying.item.artists.map(a => a.name).join(', ')}
+                        </p>
+                        <div className="space-y-2">
+                          <p className="text-gray-400">
+                            <span className="text-gray-500">Album:</span> {currentlyPlaying.item.album.name}
+                          </p>
+                          <p className="text-gray-400">
+                            <span className="text-gray-500">Duration:</span> {Math.floor(currentlyPlaying.item.duration_ms / 60000)}:{String(Math.floor((currentlyPlaying.item.duration_ms % 60000) / 1000)).padStart(2, '0')}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Enhanced Audio Features Grid */}
+                    {trackDetails.audioFeatures && (
+                      <div className="grid grid-cols-2 gap-6 mb-8">
+                        {/* Energy Meter */}
+                        <div className="bg-gradient-to-br from-gray-800/50 to-gray-800/30 p-6 rounded-xl backdrop-blur-sm border border-white/10">
+                          <div className="flex justify-between items-center mb-3">
+                            <div>
+                            <h4 className="text-sm font-medium text-gray-400">Energy</h4>
+                              <p className="text-xs text-gray-500">Track's intensity and activity</p>
+                            </div>
+                            <span className="text-2xl font-bold text-white">
+                              {Math.round(trackDetails.audioFeatures.energy * 100)}%
+                            </span>
+                          </div>
+                          <div className="h-3 bg-gray-700/50 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-1000 ease-out"
+                              style={{ width: `${trackDetails.audioFeatures.energy * 100}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Danceability Meter */}
+                        <div className="bg-gradient-to-br from-gray-800/50 to-gray-800/30 p-6 rounded-xl backdrop-blur-sm border border-white/10">
+                          <div className="flex justify-between items-center mb-3">
+                            <div>
+                              <h4 className="text-sm font-medium text-gray-400">Danceability</h4>
+                              <p className="text-xs text-gray-500">How suitable for dancing</p>
+                            </div>
+                            <span className="text-2xl font-bold text-white">
+                              {Math.round(trackDetails.audioFeatures.danceability * 100)}%
+                            </span>
+                          </div>
+                          <div className="h-3 bg-gray-700/50 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-gradient-to-r from-purple-500 to-purple-400 rounded-full transition-all duration-1000 ease-out"
+                              style={{ width: `${trackDetails.audioFeatures.danceability * 100}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Valence (Mood) Meter */}
+                        <div className="bg-gradient-to-br from-gray-800/50 to-gray-800/30 p-6 rounded-xl backdrop-blur-sm border border-white/10">
+                          <div className="flex justify-between items-center mb-3">
+                            <div>
+                              <h4 className="text-sm font-medium text-gray-400">Valence (Mood)</h4>
+                              <p className="text-xs text-gray-500">Musical positiveness</p>
+                            </div>
+                            <span className="text-2xl font-bold text-white">
+                              {Math.round(trackDetails.audioFeatures.valence * 100)}%
+                            </span>
+                          </div>
+                          <div className="h-3 bg-gray-700/50 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-gradient-to-r from-blue-500 to-blue-400 rounded-full transition-all duration-1000 ease-out"
+                              style={{ width: `${trackDetails.audioFeatures.valence * 100}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Tempo Display */}
+                        <div className="bg-gradient-to-br from-gray-800/50 to-gray-800/30 p-6 rounded-xl backdrop-blur-sm border border-white/10">
+                          <div className="flex justify-between items-center">
+                            <div>
+                              <h4 className="text-sm font-medium text-gray-400">Tempo</h4>
+                              <p className="text-xs text-gray-500">Track speed (BPM)</p>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-2xl font-bold text-white">
+                                {Math.round(trackDetails.audioFeatures.tempo)}
+                              </span>
+                              <span className="text-sm text-gray-400 ml-1">BPM</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Enhanced Action Buttons */}
+                    <div className="flex gap-4 mt-8">
+                      <button
+                        onClick={handleAddToLiked}
+                        className="flex-1 flex items-center justify-center gap-3 px-6 py-4 bg-white/5 hover:bg-white/10 text-white rounded-xl transition-all duration-200 hover:scale-[1.02] group border border-white/10"
+                      >
+                        <Heart className="w-5 h-5 group-hover:text-pink-500 transition-colors" />
+                        <span>Add to Liked Songs</span>
+                      </button>
+                      
+                      <button
+                        onClick={handleGetSimilarSongs}
+                        className="flex-1 flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white rounded-xl transition-all duration-200 hover:scale-[1.02] group shadow-lg shadow-emerald-500/20"
+                      >
+                        <ListMusic className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                        <span>Discover Similar</span>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
