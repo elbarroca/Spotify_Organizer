@@ -1126,6 +1126,61 @@ const Discover = () => {
     syncOnLoad();
   }, [token]);
 
+  // Add this function near the other handlers
+  const handleSuggestionClick = async (track: Track) => {
+    try {
+      toast.loading('Finding new suggestions...', { id: 'suggestion-refresh' });
+      
+      // Get audio features for better recommendations
+      const featuresResponse = await fetch(
+        `https://api.spotify.com/v1/audio-features/${track.id}`,
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+
+      const features = await featuresResponse.json();
+
+      // Get artist details for genre information
+      const artistResponse = await fetch(
+        `https://api.spotify.com/v1/artists/${track.artists[0].id}`,
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      const artistData = await artistResponse.json();
+
+      // Use track features and artist genre for better recommendations
+      const response = await fetch(
+        `https://api.spotify.com/v1/recommendations?` + new URLSearchParams({
+          seed_tracks: track.id,
+          seed_artists: track.artists[0].id,
+          seed_genres: artistData.genres[0] || '',
+          target_energy: features.energy.toString(),
+          target_danceability: features.danceability.toString(),
+          target_valence: features.valence.toString(),
+          min_popularity: '20',
+          limit: '100'
+        }),
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+
+      if (!response.ok) throw new Error('Failed to get recommendations');
+      
+      const data = await response.json();
+      setSelectedArtistTracks(data.tracks);
+      toast.dismiss('suggestion-refresh');
+      toast.success(`Found ${data.tracks.length} new suggestions!`);
+      
+    } catch (error) {
+      console.error('Failed to fetch new suggestions:', error);
+      toast.dismiss('suggestion-refresh');
+      toast.error('Failed to find new suggestions');
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
@@ -1431,8 +1486,9 @@ const Discover = () => {
                 {selectedArtistTracks.map((track) => (
                   <div 
                     key={track.id}
+                    onClick={() => handleSuggestionClick(track)}
                     className="flex items-center gap-4 p-3 bg-gray-800/30 rounded-lg hover:bg-gray-800/50 
-                      transition-all duration-300 group"
+                      transition-all duration-300 group cursor-pointer"
                   >
                     <div className="relative">
                       <img 
@@ -1441,7 +1497,10 @@ const Discover = () => {
                         className="w-12 h-12 rounded"
                       />
                       <button 
-                        onClick={(e) => handlePreviewPlay(e, track.preview_url, track)}
+                        onClick={(e) => {
+                          e.stopPropagation(); // Prevent suggestion refresh when playing preview
+                          handlePreviewPlay(e, track.preview_url, track);
+                        }}
                         className="absolute inset-0 flex items-center justify-center bg-black/60 
                           opacity-0 group-hover:opacity-100 transition-opacity rounded"
                       >
@@ -1453,7 +1512,10 @@ const Discover = () => {
                       </button>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h4 className="text-white text-sm font-medium truncate">{track.name}</h4>
+                      <h4 className="text-white text-sm font-medium truncate group-hover:text-emerald-500 
+                        transition-colors">
+                        {track.name}
+                      </h4>
                       <p className="text-gray-400 text-xs truncate">
                         {track.artists.map((a: any) => a.name).join(', ')}
                       </p>
@@ -1492,7 +1554,11 @@ const Discover = () => {
                       <button 
                         onClick={(e) => {
                           e.stopPropagation(); // Prevent track selection when clicking play
-                          handlePreviewPlay(e, track.preview_url || null, track);
+                          handlePreviewPlay(e, track.preview_url || null, {
+                            ...track,
+                            uri: track.id,
+                            preview_url: track.preview_url || null // Ensure preview_url is string | null
+                          });
                         }}
                         className="absolute inset-0 flex items-center justify-center bg-black/60 
                           opacity-0 group-hover:opacity-100 transition-opacity rounded"

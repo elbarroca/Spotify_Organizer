@@ -1,11 +1,14 @@
 import { useAuth } from '@/contexts/AuthContext';
-import { ListMusic, LogOut, Home, Search, Library, BarChart3, Music, Plus } from 'lucide-react';
+import { ListMusic, LogOut, Home, Search, Library, BarChart3, Music, Plus, Users } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import { cn } from '@/utils/cn';
+import { NowPlaying } from './NowPlaying';
+import { useSpotifyPlayback } from '@/hooks/useSpotifyPlayback';
 
 export const Sidebar = () => {
   const { logout, user } = useAuth();
   const location = useLocation();
+  const { currentTrack, isPlaying, handlePlayPause, handleNext, handlePrevious } = useSpotifyPlayback();
 
   const isActivePath = (path: string) => {
     return location.pathname === path;
@@ -16,6 +19,7 @@ export const Sidebar = () => {
     { icon: Plus, label: 'Create Playlist', path: '/create' },
     { icon: Search, label: 'Discover', path: '/discover' },
     { icon: Library, label: 'Organize Library', path: '/organize' },
+    { icon: Users, label: 'Find Alikes', path: '/find-alikes' },
     { icon: BarChart3, label: 'Profile Analytics', path: '/profile' },
   ];
 
@@ -29,7 +33,7 @@ export const Sidebar = () => {
             <div className="absolute inset-0 bg-emerald-500/30 blur-2xl rounded-full group-hover:bg-emerald-400/40 transition-all duration-300" />
           </div>
           <span className="text-xl font-bold bg-gradient-to-r from-emerald-300 via-emerald-400 to-emerald-500 bg-clip-text text-transparent group-hover:from-emerald-200 group-hover:via-emerald-300 group-hover:to-emerald-400 transition-all duration-500">
-            SpotOrganize
+            Eightify
           </span>
         </div>
       </div>
@@ -60,6 +64,15 @@ export const Sidebar = () => {
           ))}
         </div>
       </nav>
+
+      {/* Now Playing Section */}
+      <NowPlaying
+        currentTrack={currentTrack}
+        isPlaying={isPlaying}
+        onPlayPause={handlePlayPause}
+        onNext={handleNext}
+        onPrevious={handlePrevious}
+      />
 
       {/* User Profile Section */}
       {user && (

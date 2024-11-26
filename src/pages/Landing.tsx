@@ -11,14 +11,14 @@ export default function Landing() {
       <section className="container mx-auto px-6 pt-32 pb-20 text-center">
         <div className="flex items-center justify-center gap-3 mb-8">
           <Music className="h-12 w-12 text-emerald-500" />
-          <h1 className="text-3xl font-bold text-white">SpotOrganize</h1>
+          <h1 className="text-3xl font-bold text-white">Eightify</h1>
         </div>
         <h2 className="text-5xl md:text-6xl font-bold text-white mb-6">
           Your Music, Untangled <span className="text-emerald-500">🎶</span>
         </h2>
         <p className="text-xl text-gray-300 mb-8 max-w-3xl mx-auto">
           If your saved songs on Spotify feel like a chaotic mess, we get it. Sifting through hundreds—maybe 
-          thousands—of tracks to create playlists is overwhelming. That's why we built SpotOrganize: the fastest 
+          thousands—of tracks to create playlists is overwhelming. That's why we built Eightify: the fastest 
           way to sort and curate your liked songs into playlists you'll actually enjoy.
         </p>
         <button
@@ -69,7 +69,7 @@ export default function Landing() {
           <h2 className="text-3xl font-bold text-white mb-6">Rediscover the Joy of Your Music</h2>
           <p className="text-xl text-gray-300 mb-8">
             Your Spotify library is more than just songs—it's memories, moods, and moments waiting to be replayed. 
-            Don't let disorganization hold you back. With SpotOrganize, you can finally enjoy your music the way 
+            Don't let disorganization hold you back. With Eightify, you can finally enjoy your music the way 
             it was meant to be: curated, personal, and stress-free.
           </p>
         </div>
@@ -80,7 +80,7 @@ export default function Landing() {
         <div className="bg-gradient-to-r from-emerald-500/10 to-emerald-600/10 backdrop-blur-sm rounded-2xl p-12 text-center">
           <h2 className="text-3xl font-bold text-white mb-4">Ready to Transform Your Music Library?</h2>
           <p className="text-xl text-gray-300 mb-8">
-            Stop letting your saved tracks gather dust. With SpotOrganize, you can bring order to the chaos 
+            Stop letting your saved tracks gather dust. With Eightify, you can bring order to the chaos 
             and create playlists that match your mood, your moments, and your life.
           </p>
           <button
@@ -98,18 +98,18 @@ export default function Landing() {
         <div className="flex flex-col md:flex-row items-center justify-between">
           <div className="flex items-center gap-2 mb-4 md:mb-0">
             <Music className="h-6 w-6 text-emerald-500" />
-            <span className="text-white">SpotOrganize</span>
+            <span className="text-white">Eightify</span>
           </div>
           <div className="flex items-center gap-4">
             <a
-              href="https://github.com/elbarroca/spotorganize"
+              href="https://github.com/elbarroca/Eightify"
               target="_blank"
               rel="noopener noreferrer"
               className="text-gray-400 hover:text-white transition-colors"
             >
               <Github className="w-6 h-6" />
             </a>
-            <span className="text-gray-400">© 2024 SpotOrganize. All rights reserved.</span>
+            <span className="text-gray-400">© 2024 Eightify. All rights reserved.</span>
           </div>
         </div>
       </footer>

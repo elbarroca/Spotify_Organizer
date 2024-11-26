@@ -21,7 +21,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/30">
                   <Music className="w-5 h-5 text-white" />
                 </div>
-                <span className="ml-3 text-xl font-bold text-white">SpotOrganize</span>
+                <span className="ml-3 text-xl font-bold text-white">Eightify</span>
               </div>
               <button
                 onClick={logout}

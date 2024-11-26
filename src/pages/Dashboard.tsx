@@ -656,7 +656,7 @@ const Dashboard = () => {
       {/* Quick Actions */}
       <div className="grid grid-cols-3 gap-6 mb-12">
         <button
-          onClick={() => navigate('/criteria')}
+          onClick={() => navigate('/create')}
           className="p-6 bg-emerald-500/10 hover:bg-emerald-500/20 rounded-xl transition-colors group"
         >
           <div className="flex items-center justify-between mb-4">

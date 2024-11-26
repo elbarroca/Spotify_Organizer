@@ -13,6 +13,7 @@ import { Sidebar } from './components/Sidebar';
 import Landing from './pages/Landing';
 import { Toaster } from 'sonner';
 import Profile from "@/pages/Profile"
+import FindAlikes from './pages/FindAlikes';
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -59,7 +60,7 @@ const router = createBrowserRouter([
     )
   },
   {
-    path: "/criteria",
+    path: "/create",
     element: (
       <PrivateRoute>
         <Layout>
@@ -114,6 +115,16 @@ const router = createBrowserRouter([
       <PrivateRoute>
         <Layout>
           <Profile />
+        </Layout>
+      </PrivateRoute>
+    )
+  },
+  {
+    path: "/find-alikes",
+    element: (
+      <PrivateRoute>
+        <Layout>
+          <FindAlikes />
         </Layout>
       </PrivateRoute>
     )
