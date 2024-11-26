@@ -12,7 +12,7 @@ import Organize from './pages/Organize';
 import { Sidebar } from './components/Sidebar';
 import Landing from './pages/Landing';
 import { Toaster } from 'sonner';
-import Profile from "@/pages/Profile"
+import Profile from './pages/Profile';
 import FindAlikes from './pages/FindAlikes';
 
 function Layout({ children }: { children: React.ReactNode }) {

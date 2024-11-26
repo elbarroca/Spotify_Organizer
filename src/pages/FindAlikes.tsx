@@ -7,6 +7,7 @@ import { CreateCommunityModal } from '@/components/communities/CreateCommunityMo
 import { CommunityCard } from '@/components/communities/CommunityCard';
 import { FriendCard } from '@/components/friends/FriendCard';
 import { toast } from 'sonner';
+import { SpotifyApi } from '@spotify/web-api-ts-sdk';
 
 type Tab = 'communities' | 'friends';
 
@@ -18,12 +19,29 @@ interface Community {
   image?: string;
   tags: string[];
   isPrivate: boolean;
+  recentActivity: {
+    type: string;
+    user: string;
+    content: string;
+    timestamp: string;
+  }[];
+  topPlaylists: {
+    name: string;
+    creator: string;
+    trackCount: number;
+    duration: string;
+  }[];
+}
+
+interface CommunityDetails extends Community {
+  memberList?: string[];
+  createdAt?: string;
 }
 
 interface Friend {
   id: string;
   name: string;
-  image?: string;
+  image: string | null;
   currentTrack?: {
     name: string;
     artist: string;
@@ -61,20 +79,19 @@ export default function FindAlikes() {
   }, [activeTab, spotifyApi]);
 
   const calculateSimilarity = async (userTopTracks: SpotifyApi.TrackObjectFull[], friendTopTracks: SpotifyApi.TrackObjectFull[]) => {
-    // Calculate shared artists
     const userArtists = new Set(userTopTracks.map(track => track.artists[0].id));
     const friendArtists = new Set(friendTopTracks.map(track => track.artists[0].id));
-    const sharedArtists = new Set([...userArtists].filter(x => friendArtists.has(x)));
+    const sharedArtists = new Set(Array.from(userArtists).filter(x => friendArtists.has(x)));
 
     // Calculate shared genres (from artists)
     const [userArtistDetails, friendArtistDetails] = await Promise.all([
-      spotifyApi.getArtists([...userArtists]),
-      spotifyApi.getArtists([...friendArtists])
+      spotifyApi.getArtists(Array.from(userArtists)),
+      spotifyApi.getArtists(Array.from(friendArtists))
     ]);
 
     const userGenres = new Set(userArtistDetails.body.artists.flatMap(artist => artist.genres));
     const friendGenres = new Set(friendArtistDetails.body.artists.flatMap(artist => artist.genres));
-    const sharedGenres = new Set([...userGenres].filter(x => friendGenres.has(x)));
+    const sharedGenres = new Set(Array.from(userGenres).filter(x => friendGenres.has(x)));
 
     // Calculate similarity score (weighted average)
     const artistScore = (sharedArtists.size / Math.min(userArtists.size, friendArtists.size)) * 100;
@@ -88,15 +105,15 @@ export default function FindAlikes() {
       setIsLoading(true);
 
       // Get user's profile and following/followers
-      const [userProfile, following, followers] = await Promise.all([
-        spotifyApi.getMe(),
-        spotifyApi.getFollowed('artist'), // Get followed users
-        spotifyApi.getFollowers(userProfile.body.id) // Get followers
+      const userProfile = await spotifyApi.getMe();
+      const [following, followers] = await Promise.all([
+        spotifyApi.getFollowedArtists(), // Get followed users
+        spotifyApi.getFollowedArtists({ after: userProfile.body.id }) // Get followers
       ]);
 
       // Create sets for quick lookup
-      const followingIds = new Set(following.body.artists.items.map(user => user.id));
-      const followerIds = new Set(followers.body.items.map(user => user.id));
+      const followingIds = new Set(following.body.artists.items.map((user: SpotifyApi.ArtistObjectFull) => user.id));
+      const followerIds = new Set(followers.body.artists.items.map((user: SpotifyApi.ArtistObjectFull) => user.id));
 
       // Get user's top items for similarity comparison
       const [userTopTracks, userTopArtists] = await Promise.all([
@@ -105,21 +122,21 @@ export default function FindAlikes() {
       ]);
 
       // Process each user (following and followers)
-      const allUserIds = new Set([...followingIds, ...followerIds]);
+      const allUserIds = Array.from(new Set([...Array.from(followingIds), ...Array.from(followerIds)]));
       
       const friendPromises = Array.from(allUserIds).map(async (userId) => {
         try {
-          const [userData, userPlaylists, topArtists, recentTracks] = await Promise.all([
-            spotifyApi.getUser(userId),
-            spotifyApi.getUserPlaylists(userId, { limit: 50 }),
-            spotifyApi.getArtists([userId]),
-            spotifyApi.getRecentlyPlayedTracks({ limit: 20 })
+          const [userData, userPlaylists, userTopTracks, recentTracks] = await Promise.all([
+            spotifyApi.getUser(String(userId)),
+            spotifyApi.getUserPlaylists(String(userId), { limit: 50 }),
+            spotifyApi.getMyTopTracks({ limit: 50, time_range: 'medium_term' }),
+            spotifyApi.getMyRecentlyPlayedTracks({ limit: 20 })
           ]);
 
           // Calculate similarity score
           const similarity = await calculateSimilarity(
             userTopTracks.body.items,
-            recentTracks.body.items.map(item => item.track)
+            recentTracks.body.items.map((item: SpotifyApi.PlayHistoryObject) => item.track)
           );
 
           // Get current playback if available
@@ -135,40 +152,39 @@ export default function FindAlikes() {
           } catch (error) {
             console.log('No current playback for user');
           }
-
           // Extract top genres
-          const userGenres = topArtists.body.artists
-            .flatMap(artist => artist.genres)
-            .reduce((acc, genre) => {
+          const userGenres = userTopArtists.body.items
+            .flatMap((artist: SpotifyApi.ArtistObjectFull) => artist.genres)
+            .reduce((acc: Record<string, number>, genre: string) => {
               acc[genre] = (acc[genre] || 0) + 1;
               return acc;
             }, {} as Record<string, number>);
 
           const topGenres = Object.entries(userGenres)
-            .sort(([,a], [,b]) => b - a)
+            .sort(([,a], [,b]) => b - a as number)
             .slice(0, 5)
             .map(([genre]) => genre);
 
           return {
             id: userData.body.id,
             name: userData.body.display_name || userData.body.id,
-            image: userData.body.images?.[0]?.url,
+            image: userData.body.images?.[0]?.url ?? null,
             currentTrack,
             metrics: {
               similarityScore: similarity,
               playlistCount: userPlaylists.body.total,
-              followersCount: userData.body.followers.total,
-              monthlyListeners: topArtists.body.artists[0]?.followers.total,
+              followersCount: userData.body.followers?.total ?? 0,
+              monthlyListeners: userTopArtists.body.items[0]?.followers?.total ?? 0,
               topGenres,
               recentlyPlayed: recentTracks.body.items.length
             },
             relationship: {
               isFollowingMe: followerIds.has(userId),
-              isFollowedByMe: followingIds.has(userId),
-              mutualFriends: 0 // We'll calculate this later
+              isFollowedByMe: followingIds.has(userId), 
+              mutualFriends: 0
             },
             spotifyUrl: userData.body.external_urls.spotify
-          };
+          } as Friend;
         } catch (error) {
           console.error(`Error processing user ${userId}:`, error);
           return null;
@@ -177,7 +193,10 @@ export default function FindAlikes() {
 
       const friendsData = (await Promise.all(friendPromises))
         .filter((friend): friend is Friend => friend !== null)
-        .sort((a, b) => b.metrics.similarityScore - a.metrics.similarityScore);
+        .sort((a, b) => {
+          if (!a || !b) return 0;
+          return b.metrics.similarityScore - a.metrics.similarityScore;
+        });
 
       setFriends(friendsData);
 
@@ -216,7 +235,41 @@ export default function FindAlikes() {
         description: `A community for ${genre} music lovers. Share playlists, discover new artists, and connect with fellow fans.`,
         memberCount: Math.floor(Math.random() * 10000) + 1000,
         tags: [genre, ...topGenres.filter(g => g !== genre).slice(0, 2)],
-      isPrivate: false,
+        isPrivate: false,
+        recentActivity: [
+          {
+            type: 'playlist',
+            user: 'Community Bot',
+            content: `created a new "${genre} Essentials" playlist`,
+            timestamp: '2 hours ago'
+          },
+          {
+            type: 'member',
+            user: 'Music Lover',
+            content: 'joined the community',
+            timestamp: '4 hours ago'
+          },
+          {
+            type: 'message',
+            user: 'Genre Expert',
+            content: `started a discussion about ${genre} trends`,
+            timestamp: '6 hours ago'
+          }
+        ],
+        topPlaylists: [
+          {
+            name: `Best of ${genre}`,
+            creator: 'Community Playlist',
+            trackCount: 50,
+            duration: '3h 25m'
+          },
+          {
+            name: 'New Discoveries',
+            creator: 'Community Bot',
+            trackCount: 30,
+            duration: '2h 10m'
+          }
+        ]
       }));
 
       setCommunities(suggestedCommunities);
@@ -330,7 +383,16 @@ export default function FindAlikes() {
                   </div>
               <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
                 {communities.map((community) => (
-                  <CommunityCard key={community.id} community={community} />
+                  <CommunityCard 
+                    key={community.id} 
+                    community={{
+                      ...community,
+                      recentActivity: community.recentActivity.map(activity => ({
+                        ...activity,
+                        type: activity.type as "playlist" | "member" | "message"
+                      }))
+                    }} 
+                  />
                 ))}
               </div>
                 </>
@@ -340,11 +402,17 @@ export default function FindAlikes() {
                     <h2 className="text-2xl font-bold text-white mb-2">Music Soulmates</h2>
                     <p className="text-gray-400">People who share your taste in music</p>
                   </div>
-              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                {friends.map((friend) => (
-                  <FriendCard key={friend.id} friend={friend} />
-                ))}
-              </div>
+                  <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                    {friends.map((friend) => (
+                      <FriendCard 
+                        key={friend.id} 
+                        friend={{
+                          ...friend,
+                          image: friend.image || undefined
+                        }} 
+                      />
+                    ))}
+                  </div>
                 </>
             )}
           </motion.div>
