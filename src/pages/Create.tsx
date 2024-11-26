@@ -74,7 +74,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import SpotifyWebApi from 'spotify-web-api-node';
-import { toast } from 'react-hot-toast';
+import toast from 'react-hot-toast';
 
 // Define icon type
 type IconType = React.ComponentType<{ className?: string }>;
