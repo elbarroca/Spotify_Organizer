@@ -202,6 +202,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  const refreshSpotifyToken = async () => {
+    try {
+      const response = await fetch('/api/auth/refresh-token', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await response.json();
+      
+      if (data.access_token) {
+        spotifyApi.setAccessToken(data.access_token);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Error refreshing token:', error);
+      return false;
+    }
+  };
+
   useEffect(() => {
     const hash = window.location.hash;
     if (hash) {

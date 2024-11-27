@@ -14,6 +14,7 @@ import Landing from './pages/Landing';
 import { Toaster } from 'sonner';
 import Profile from './pages/Profile';
 import FindAlikes from './pages/FindAlikes';
+import Spotify from './pages/Spotify';
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -55,6 +56,16 @@ const router = createBrowserRouter([
       <PrivateRoute>
         <Layout>
           <Dashboard />
+        </Layout>
+      </PrivateRoute>
+    )
+  },
+  {
+    path: "/spotify",
+    element: (
+      <PrivateRoute>
+        <Layout>
+          <Spotify />
         </Layout>
       </PrivateRoute>
     )

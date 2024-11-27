@@ -16,7 +16,10 @@ import {
   Home,
   PlayCircle,
   Edit2,
-  BookmarkIcon
+  BookmarkIcon,
+  Heart,
+  Play,
+  Pause
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -24,6 +27,8 @@ import CreatePlaylistModal from '../components/CreatePlaylistModal';
 import { toast } from 'sonner';
 import { musicService } from '../services/musicService';
 import { formatDistanceToNow } from 'date-fns';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
+import { cn } from '@/utils/cn';
 
 interface Track {
   id: string;
@@ -76,6 +81,44 @@ interface GroupModalProps {
   onClose: () => void;
   onCreatePlaylist: () => void;
   onPlayPreview: (track: Track) => Promise<void>;
+}
+
+interface SavedTrack {
+  id: string;
+  name: string;
+  artists: Array<{ name: string }>;
+  album: {
+    name: string;
+    images: Array<{ url: string }>;
+  };
+  duration_ms: number;
+  added_at: string;
+}
+
+// Add new interface for cached data
+interface CachedMusicData {
+  tracks: LikedTrack[];
+  lastFetched: string;
+}
+
+// Add new utility functions
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const chunkArray = <T,>(array: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+};
+
+// Add new interface for chunked storage
+interface ChunkedMusicData {
+  chunks: {
+    [key: string]: LikedTrack[];
+  };
+  lastFetched: string;
+  totalTracks: number;
 }
 
 const AddToPlaylistModal: React.FC<ModalProps> = ({ isOpen, onClose, selectedTracks, playlists, onAddToPlaylist }) => {
@@ -312,8 +355,13 @@ const Organize = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState(0);
   const [lastSyncDate, setLastSyncDate] = useState<Date | null>(null);
+  const [likedSongs, setLikedSongs] = useLocalStorage<SavedTrack[]>('spotify_liked_songs', []);
+  const [currentlyPlaying, setCurrentlyPlaying] = useState<string | null>(null);
+  const [hasInitiallyFetched, setHasInitiallyFetched] = useState(() => {
+    return sessionStorage.getItem('has_fetched_songs') === 'true';
+  });
 
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, spotifyApi } = useAuth();
   const navigate = useNavigate();
 
   const fetchPlaylists = async () => {
@@ -393,15 +441,32 @@ const Organize = () => {
     setIsLoadingLiked(true);
     try {
       const token = localStorage.getItem('spotify_access_token');
+      if (!token) return;
+
+      // Check cached data first
+      const lastFetchKey = 'spotify_liked_songs_last_fetch';
+      const lastFetch = localStorage.getItem(lastFetchKey);
+      const oneHourAgo = new Date().getTime() - (60 * 60 * 1000);
+
+      if (lastFetch && new Date(lastFetch).getTime() > oneHourAgo) {
+        // Load tracks from chunked storage
+        const tracks = await loadTracksFromChunkedStorage();
+        if (tracks.length > 0) {
+          setLikedTracks(tracks);
+          organizeTracks(tracks);
+          setIsLoadingLiked(false);
+          return;
+        }
+      }
+
+      // Fetch all tracks with pagination and retry logic
       let allTracks: LikedTrack[] = [];
       let nextUrl = 'https://api.spotify.com/v1/me/tracks?limit=50';
-      let totalProcessed = 0;
-      const maxTracks = 2000; // Increased to 2000 tracks
+      let retryCount = 0;
+      const MAX_RETRIES = 3;
+      const RETRY_DELAY = 1000;
 
-      // Helper function to handle rate limiting
-      const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-      while (nextUrl && totalProcessed < maxTracks) {
+      while (nextUrl) {
         try {
           const response = await fetch(nextUrl, {
             headers: { 'Authorization': `Bearer ${token}` }
@@ -413,83 +478,221 @@ const Organize = () => {
             continue;
           }
 
-          if (!response.ok) throw new Error('Failed to fetch liked songs');
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
 
           const data = await response.json();
           
-          // Update progress
-          totalProcessed += data.items.length;
-          
-          // Process this batch of tracks
+          // Process tracks in smaller batches
           const tracks = data.items.map((item: any) => ({
             ...item.track,
             added_at: item.added_at
           }));
 
-          // Get unique artist IDs from this batch
-          const uniqueArtistIds = Array.from(
-            new Set(tracks.map((track: any) => track.artists[0]?.id).filter(Boolean))
-          ).slice(0, 50); // Limit to 50 artists per request
+          // Process artist data in batches
+          const artistBatches = chunkArray(
+            Array.from(new Set(tracks.map((track: any) => track.artists[0]?.id).filter(Boolean))),
+            20
+          );
 
-          if (uniqueArtistIds.length > 0) {
-            // Fetch artists data
-            const artistsResponse = await fetch(
-              `https://api.spotify.com/v1/artists?ids=${uniqueArtistIds.join(',')}`,
-              { headers: { 'Authorization': `Bearer ${token}` } }
-            );
-
-            if (artistsResponse.ok) {
-              const artistsData = await artistsResponse.json();
-              const artistGenres = new Map(
-                artistsData.artists.map((artist: any) => [artist.id, artist.genres])
+          for (const artistBatch of artistBatches) {
+            try {
+              const artistsResponse = await fetch(
+                `https://api.spotify.com/v1/artists?ids=${artistBatch.join(',')}`,
+                { headers: { 'Authorization': `Bearer ${token}` } }
               );
 
-              // Map genres to tracks
-              tracks.forEach((track: any) => {
-                const artistId = track.artists[0]?.id;
-                if (artistId) {
-                  track.genres = artistGenres.get(artistId) || [];
-                }
-              });
+              if (artistsResponse.ok) {
+                const artistsData = await artistsResponse.json();
+                const artistGenres = new Map(
+                  artistsData.artists.map((artist: any) => [artist.id, artist.genres])
+                );
+
+                tracks.forEach((track: any) => {
+                  const artistId = track.artists[0]?.id;
+                  if (artistId) {
+                    track.genres = artistGenres.get(artistId) || [];
+                  }
+                });
+              }
+
+              // Add delay between artist batches
+              await wait(100);
+            } catch (error) {
+              console.error('Error fetching artist data:', error);
             }
           }
 
           allTracks = [...allTracks, ...tracks];
+          
+          // Update progress
+          setSyncProgress(Math.round((allTracks.length / (data.total || 1)) * 100));
+          
+          // Save tracks in chunks as we go
+          await saveTracksToChunkedStorage(allTracks);
 
-          // Show progress in toast
-          toast.success(`Loading songs... ${totalProcessed} processed`, {
+          // Show progress
+          toast.success(`Loading songs... ${allTracks.length} processed`, {
             id: 'loading-progress',
           });
 
-          // Get next page URL
-          nextUrl = totalProcessed < maxTracks ? data.next : null;
+          nextUrl = data.next;
+          retryCount = 0; // Reset retry count on success
           
-          // Add delay between requests
+          // Add delay between track batches
           await wait(100);
 
         } catch (error) {
           console.error('Error processing batch:', error);
-          break; // Exit loop on error
+          retryCount++;
+          
+          if (retryCount >= MAX_RETRIES) {
+            toast.error('Failed to load all tracks after multiple retries');
+            break;
+          }
+          
+          await wait(RETRY_DELAY * retryCount);
         }
       }
 
+      // Update state and storage
       setLikedTracks(allTracks);
       organizeTracks(allTracks);
+      localStorage.setItem(lastFetchKey, new Date().toISOString());
       
-      // Show completion message
       toast.success(`Loaded ${allTracks.length} songs successfully!`, {
-        description: 'Your music has been organized into groups'
+        description: 'Your music library has been updated'
       });
 
     } catch (error) {
       console.error('Error fetching liked songs:', error);
       toast.error('Failed to load all liked songs', {
-        description: 'Only partial data may be available'
+        description: 'Please try again later'
       });
     } finally {
       setIsLoadingLiked(false);
+      setSyncProgress(0);
     }
   };
+
+  // Helper functions for chunked storage
+  const saveTracksToChunkedStorage = async (tracks: LikedTrack[]) => {
+    const CHUNK_SIZE = 100;
+    const chunks = chunkArray(tracks, CHUNK_SIZE);
+    
+    try {
+      chunks.forEach((chunk, index) => {
+        localStorage.setItem(
+          `spotify_liked_songs_chunk_${index}`,
+          JSON.stringify(chunk)
+        );
+      });
+      
+      localStorage.setItem('spotify_liked_songs_metadata', JSON.stringify({
+        chunks: chunks.length,
+        totalTracks: tracks.length,
+        lastFetched: new Date().toISOString()
+      }));
+    } catch (error) {
+      console.error('Error saving to storage:', error);
+      // Clear old data if storage is full
+      clearOldStorageData();
+    }
+  };
+
+  const loadTracksFromChunkedStorage = async (): Promise<LikedTrack[]> => {
+    try {
+      const metadata = localStorage.getItem('spotify_liked_songs_metadata');
+      if (!metadata) return [];
+
+      const { chunks: chunkCount } = JSON.parse(metadata);
+      let allTracks: LikedTrack[] = [];
+
+      for (let i = 0; i < chunkCount; i++) {
+        const chunk = localStorage.getItem(`spotify_liked_songs_chunk_${i}`);
+        if (chunk) {
+          allTracks = [...allTracks, ...JSON.parse(chunk)];
+        }
+      }
+
+      return allTracks;
+    } catch (error) {
+      console.error('Error loading from storage:', error);
+      return [];
+    }
+  };
+
+  const clearOldStorageData = () => {
+    // Clear old format data
+    localStorage.removeItem('spotify_liked_songs_cache');
+    
+    // Clear chunk data
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('spotify_liked_songs_chunk_')) {
+        localStorage.removeItem(key);
+      }
+    }
+    
+    localStorage.removeItem('spotify_liked_songs_metadata');
+  };
+
+  // Modify the initial useEffect
+  useEffect(() => {
+    const initializeTracks = async () => {
+      if (!isAuthenticated || !user) return;
+      
+      // First try to load from cache
+      const tracks = await loadTracksFromChunkedStorage();
+      if (tracks.length > 0) {
+        console.log('Loading cached tracks:', tracks.length);
+        setLikedTracks(tracks);
+        organizeTracks(tracks);
+        toast.success('Loaded music from cache', {
+          description: `${tracks.length} tracks loaded`
+        });
+        return;
+      }
+
+      // If no cache and hasn't fetched this session, fetch
+      if (!hasInitiallyFetched) {
+        await fetchLikedSongs();
+        setHasInitiallyFetched(true);
+        sessionStorage.setItem('has_fetched_songs', 'true');
+      }
+    };
+
+    initializeTracks();
+    fetchPlaylists(); // Keep playlist fetch separate
+  }, [isAuthenticated, user]);
+
+  // Remove or modify the periodic check effect to prevent unwanted fetches
+  useEffect(() => {
+    const checkForUpdates = async () => {
+      try {
+        const metadata = localStorage.getItem('spotify_liked_songs_metadata');
+        const lastFetch = localStorage.getItem('spotify_liked_songs_last_fetch');
+
+        if (!metadata || !lastFetch) return;
+
+        const lastFetchTime = new Date(lastFetch).getTime();
+        const oneHourAgo = new Date().getTime() - (60 * 60 * 1000);
+
+        // Only fetch if data is old AND user has been active
+        if (lastFetchTime < oneHourAgo && document.visibilityState === 'visible') {
+          await fetchLikedSongs();
+          setHasInitiallyFetched(true);
+          sessionStorage.setItem('has_fetched_songs', 'true');
+        }
+      } catch (error) {
+        console.error('Error checking for updates:', error);
+      }
+    };
+
+    const interval = setInterval(checkForUpdates, 60 * 60 * 1000); // Check every hour
+    return () => clearInterval(interval);
+  }, []);
 
   const organizeTracks = (tracks: LikedTrack[]) => {
     const groups: MusicGroup[] = [];
@@ -537,14 +740,6 @@ const Organize = () => {
     groups.sort((a, b) => b.count - a.count);
     setMusicGroups(groups.slice(0, 20)); // Show top 20 groups
   };
-
-  // Add dependency to useEffect
-  useEffect(() => {
-    if (isAuthenticated && user) {
-      fetchPlaylists();
-      fetchLikedSongs();
-    }
-  }, [isAuthenticated, user]);
 
   // Search effect
   useEffect(() => {
@@ -928,6 +1123,49 @@ const Organize = () => {
       checkAndSyncMusic();
     }
   }, [isAuthenticated, user]);
+
+  useEffect(() => {
+    const fetchLikedSongs = async () => {
+      try {
+        setIsLoadingLiked(true);
+        const response = await spotifyApi.getMySavedTracks({ limit: 50 });
+        const tracks = response.body.items.map(item => ({
+          id: item.track.id,
+          name: item.track.name,
+          artists: item.track.artists,
+          album: item.track.album,
+          duration_ms: item.track.duration_ms,
+          added_at: item.added_at
+        }));
+        setLikedSongs(tracks);
+      } catch (error) {
+        console.error('Error fetching liked songs:', error);
+      } finally {
+        setIsLoadingLiked(false);
+      }
+    };
+
+    fetchLikedSongs();
+  }, [spotifyApi, setLikedSongs]);
+
+  const handlePlay = async (trackId: string) => {
+    try {
+      await spotifyApi.play({
+        uris: [`spotify:track:${trackId}`]
+      });
+      setCurrentlyPlaying(trackId);
+    } catch (error) {
+      console.error('Error playing track:', error);
+    }
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('pt-BR', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
 
   if (!isAuthenticated) {
     return (

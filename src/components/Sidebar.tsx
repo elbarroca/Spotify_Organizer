@@ -4,15 +4,50 @@ import { Link, useLocation } from 'react-router-dom';
 import { cn } from '@/utils/cn';
 import { NowPlaying } from './NowPlaying';
 import { useSpotifyPlayback } from '@/hooks/useSpotifyPlayback';
+import { useCallback } from 'react';
+import { toast } from 'sonner';
 
 export const Sidebar = () => {
   const { logout, user } = useAuth();
   const location = useLocation();
-  const { currentTrack, isPlaying, handlePlayPause, handleNext, handlePrevious } = useSpotifyPlayback();
+  const { 
+    currentTrack, 
+    isPlaying, 
+    handlePlayPause, 
+    handleNext, 
+    handlePrevious,
+    playerError 
+  } = useSpotifyPlayback();
 
-  const isActivePath = (path: string) => {
+  const isActivePath = useCallback((path: string) => {
     return location.pathname === path;
-  };
+  }, [location.pathname]);
+
+  const handlePlayerControl = useCallback(async (action: () => Promise<void>) => {
+    try {
+      await action();
+    } catch (error) {
+      toast.error('Playback control failed. Please ensure Spotify is active.');
+    }
+  }, []);
+
+  const handlePlayPauseWithError = useCallback(() => {
+    handlePlayerControl(handlePlayPause);
+  }, [handlePlayPause, handlePlayerControl]);
+
+  const handleNextWithError = useCallback(() => {
+    handlePlayerControl(handleNext);
+  }, [handleNext, handlePlayerControl]);
+
+  const handlePreviousWithError = useCallback(() => {
+    handlePlayerControl(handlePrevious);
+  }, [handlePrevious, handlePlayerControl]);
+
+  const showPlayerError = playerError && (
+    <div className="px-4 py-2 text-red-400 text-sm">
+      <p>Player Error: Please open Spotify app</p>
+    </div>
+  );
 
   const navItems = [
     { icon: Home, label: 'Dashboard', path: '/dashboard' },
@@ -21,6 +56,7 @@ export const Sidebar = () => {
     { icon: Library, label: 'Organize Library', path: '/organize' },
     { icon: Users, label: 'Find Alikes', path: '/find-alikes' },
     { icon: BarChart3, label: 'Profile Analytics', path: '/profile' },
+    { icon: Music, label: 'Spotify Player', path: '/spotify' },
   ];
 
   return (
@@ -65,13 +101,18 @@ export const Sidebar = () => {
         </div>
       </nav>
 
-      {/* Now Playing Section */}
+      {/* Now Playing Section with Error Handling */}
+      {showPlayerError}
       <NowPlaying
-        currentTrack={currentTrack}
+        currentTrack={currentTrack ? {
+          title: currentTrack.name,
+          artist: currentTrack.artists[0].name,
+          imageUrl: currentTrack.album.images[0].url
+        } : null}
         isPlaying={isPlaying}
-        onPlayPause={handlePlayPause}
-        onNext={handleNext}
-        onPrevious={handlePrevious}
+        onPlayPause={handlePlayPauseWithError}
+        onNext={handleNextWithError}
+        onPrevious={handlePreviousWithError}
       />
 
       {/* User Profile Section */}
