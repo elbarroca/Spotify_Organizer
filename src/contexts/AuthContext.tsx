@@ -1,9 +1,17 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import SpotifyWebApi from 'spotify-web-api-node';
 
+// Get the correct redirect URI based on environment
+const getRedirectUri = () => {
+  const isProd = window.location.hostname === 'spotify-organizer.vercel.app';
+  return isProd 
+    ? 'https://spotify-organizer.vercel.app/callback'
+    : 'http://localhost:5173/callback';
+};
+
 const spotifyApi = new SpotifyWebApi({
   clientId: import.meta.env.VITE_SPOTIFY_CLIENT_ID,
-  redirectUri: import.meta.env.VITE_REDIRECT_URI
+  redirectUri: getRedirectUri()
 });
 
 interface SpotifyUser {
@@ -73,28 +81,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const handleApiError = useCallback((error: any) => {
     console.error('Spotify API Error:', error);
+    const errorMessage = error.response?.body?.error?.message || error.message || 'Unknown error';
+    
     if (error.statusCode === 401) {
-      setError('Authentication expired. Please log in again.');
+      setError('Session expired. Please log in again.');
       logout();
     } else if (error.statusCode === 403) {
-      setError('Access forbidden. Please check app permissions.');
-      refreshAuth();
+      if (errorMessage.includes('not authorized')) {
+        setError('Your account is not authorized to use this app. Please contact the app administrator.');
+      } else {
+        setError('Access denied. Please try logging in again.');
+        refreshAuth();
+      }
     } else {
-      setError(`An error occurred: ${error.message || 'Unknown error'}`);
+      setError(`An error occurred: ${errorMessage}`);
     }
   }, []);
 
   const login = useCallback(() => {
-    const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
-    const redirectUri = `${window.location.origin}/callback`;
-    const state = Math.random().toString(36).substring(7);
-    
-    localStorage.setItem('spotify_auth_state', state);
-    localStorage.setItem('spotify_auth_redirect', window.location.pathname);
-    
-    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}&show_dialog=true`;
-    
-    window.location.href = authUrl;
+    try {
+      const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
+      if (!clientId) {
+        throw new Error('Spotify Client ID is not configured');
+      }
+
+      const redirectUri = getRedirectUri();
+      const state = Math.random().toString(36).substring(7);
+      
+      // Store the current environment's redirect URI
+      localStorage.setItem('spotify_redirect_uri', redirectUri);
+      localStorage.setItem('spotify_auth_state', state);
+      localStorage.setItem('spotify_auth_redirect', window.location.pathname);
+      
+      const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}&show_dialog=true`;
+      
+      window.location.href = authUrl;
+    } catch (error: any) {
+      handleApiError(error);
+    }
   }, []);
 
   const logout = useCallback(() => {
@@ -157,16 +181,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [handleApiError]);
 
   const refreshAuth = useCallback(() => {
-    const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
-    const redirectUri = `${window.location.origin}/callback`;
-    const state = Math.random().toString(36).substring(7);
-    
-    localStorage.setItem('spotify_auth_state', state);
-    localStorage.setItem('spotify_auth_redirect', window.location.pathname);
-    
-    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}&show_dialog=true`;
-    
-    window.location.href = authUrl;
+    try {
+      const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
+      if (!clientId) {
+        throw new Error('Spotify Client ID is not configured');
+      }
+
+      const redirectUri = getRedirectUri();
+      const state = Math.random().toString(36).substring(7);
+      
+      localStorage.setItem('spotify_redirect_uri', redirectUri);
+      localStorage.setItem('spotify_auth_state', state);
+      localStorage.setItem('spotify_auth_redirect', window.location.pathname);
+      
+      const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}&show_dialog=true`;
+      
+      window.location.href = authUrl;
+    } catch (error: any) {
+      handleApiError(error);
+    }
   }, []);
 
   useEffect(() => {
