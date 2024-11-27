@@ -28,6 +28,7 @@ interface AuthContextType {
   checkAuth: () => Promise<void>;
   spotifyApi: SpotifyWebApi;
   refreshAuth: () => void;
+  error: string | null;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -67,12 +68,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [tokenExpirationTime, setTokenExpirationTime] = useState<number | null>(null);
+
+  const handleApiError = useCallback((error: any) => {
+    console.error('Spotify API Error:', error);
+    if (error.statusCode === 401) {
+      setError('Authentication expired. Please log in again.');
+      logout();
+    } else if (error.statusCode === 403) {
+      setError('Access forbidden. Please check app permissions.');
+      refreshAuth();
+    } else {
+      setError(`An error occurred: ${error.message || 'Unknown error'}`);
+    }
+  }, []);
 
   const login = useCallback(() => {
     const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
     const redirectUri = `${window.location.origin}/callback`;
+    const state = Math.random().toString(36).substring(7);
     
-    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}`;
+    localStorage.setItem('spotify_auth_state', state);
+    localStorage.setItem('spotify_auth_redirect', window.location.pathname);
+    
+    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}&show_dialog=true`;
     
     window.location.href = authUrl;
   }, []);
@@ -80,27 +100,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = useCallback(() => {
     localStorage.removeItem('spotify_access_token');
     localStorage.removeItem('spotify_auth_state');
+    localStorage.removeItem('token_expiration_time');
     setIsAuthenticated(false);
     setUser(null);
     setToken(null);
+    setTokenExpirationTime(null);
+    setError(null);
     spotifyApi.setAccessToken('');
     window.location.href = '/';
   }, []);
 
   const checkAuth = useCallback(async () => {
     try {
+      setError(null);
       const storedToken = localStorage.getItem('spotify_access_token');
+      const expirationTime = Number(localStorage.getItem('token_expiration_time'));
       
-      if (!storedToken) {
+      if (!storedToken || (expirationTime && Date.now() >= expirationTime)) {
         setIsAuthenticated(false);
         setLoading(false);
+        if (storedToken) {
+          refreshAuth();
+        }
         return;
       }
 
       spotifyApi.setAccessToken(storedToken);
       setToken(storedToken);
 
-      const response = await spotifyApi.getMe();
+      const response = await spotifyApi.getMe().catch((error) => {
+        if (error.statusCode === 401 || error.statusCode === 403) {
+          throw error;
+        }
+        return null;
+      });
+
+      if (!response) {
+        throw new Error('Failed to fetch user data');
+      }
+
       const spotifyUser = response.body as SpotifyUser;
       
       const userData: User = {
@@ -111,16 +149,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       setUser(userData);
       setIsAuthenticated(true);
-    } catch (error) {
-      console.error('Auth check failed:', error);
-      localStorage.removeItem('spotify_access_token');
-      setToken(null);
-      setIsAuthenticated(false);
-      setUser(null);
+    } catch (error: any) {
+      handleApiError(error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [handleApiError]);
 
   const refreshAuth = useCallback(() => {
     const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
@@ -130,14 +164,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem('spotify_auth_state', state);
     localStorage.setItem('spotify_auth_redirect', window.location.pathname);
     
-    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}`;
+    const authUrl = `https://accounts.spotify.com/authorize?client_id=${clientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(SPOTIFY_SCOPES)}&show_dialog=true`;
     
     window.location.href = authUrl;
   }, []);
 
   useEffect(() => {
+    const hash = window.location.hash;
+    if (hash) {
+      const params = new URLSearchParams(hash.substring(1));
+      const accessToken = params.get('access_token');
+      const expiresIn = params.get('expires_in');
+      
+      if (accessToken) {
+        localStorage.setItem('spotify_access_token', accessToken);
+        if (expiresIn) {
+          const expirationTime = Date.now() + Number(expiresIn) * 1000;
+          localStorage.setItem('token_expiration_time', expirationTime.toString());
+          setTokenExpirationTime(expirationTime);
+        }
+        window.location.hash = '';
+      }
+    }
     checkAuth();
   }, [checkAuth]);
+
+  // Set up token refresh timer
+  useEffect(() => {
+    if (tokenExpirationTime) {
+      const timeUntilExpiration = tokenExpirationTime - Date.now();
+      if (timeUntilExpiration > 0) {
+        const refreshTimer = setTimeout(() => {
+          refreshAuth();
+        }, timeUntilExpiration - 60000); // Refresh 1 minute before expiration
+        return () => clearTimeout(refreshTimer);
+      }
+    }
+  }, [tokenExpirationTime, refreshAuth]);
 
   const value = {
     isAuthenticated,
@@ -148,7 +211,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     logout,
     checkAuth,
     spotifyApi,
-    refreshAuth
+    refreshAuth,
+    error
   };
 
   return (
