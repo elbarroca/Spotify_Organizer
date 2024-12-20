@@ -1,13 +1,18 @@
+import { appwriteConfig } from './appwrite';
+
 export const SPOTIFY_CONFIG = {
-  clientId: import.meta.env.VITE_SPOTIFY_CLIENT_ID,
-  clientSecret: import.meta.env.VITE_SPOTIFY_CLIENT_SECRET,
-  redirectUri: window.location.origin,
+  clientId: appwriteConfig.spotifyClientId,
+  clientSecret: appwriteConfig.spotifyClientSecret,
+  redirectUri: appwriteConfig.redirectUri,
   scopes: [
-    'user-library-read',
+    'user-read-email',
+    'user-read-private',
+    'playlist-read-private',
     'playlist-modify-public',
     'playlist-modify-private',
-    'user-top-read',
-    'user-read-recently-played',
-    'user-read-private'
-  ].join(' ')
-};
+    'user-library-read',
+    'user-library-modify'
+  ]
+} as const;
+
+export const SPOTIFY_SCOPES = SPOTIFY_CONFIG.scopes;

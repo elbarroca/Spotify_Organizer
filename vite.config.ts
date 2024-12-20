@@ -6,26 +6,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
-      'thus': path.resolve(__dirname, './src')
-    },
-  },
-  build: {
-    target: 'esnext',
-    outDir: 'dist',
-    assetsDir: 'assets',
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          charts: ['recharts'],
-          motion: ['framer-motion']
-        }
-      }
-    },
-    commonjsOptions: {
-      include: [/node_modules/],
-      extensions: ['.js', '.cjs']
+      '@': path.resolve(__dirname, './src')
     }
   }
 });

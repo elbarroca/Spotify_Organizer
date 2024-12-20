@@ -1,16 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { 
   Music, 
   Plus, 
-  Save, 
   Search,
   Loader2,
   ArrowRight,
-  Play,
-  Pause,
-  SkipForward,
-  SkipBack,
-  Volume2,
   Heart,
   ListMusic,
   X
@@ -19,24 +13,63 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Dialog, DialogContent, DialogOverlay } from '@radix-ui/react-dialog';
 import { toast } from 'sonner';
+import { NowPlaying } from '@/components/NowPlaying';
 
-interface Track {
-  id: string;
-  name: string;
-  artists: { name: string }[];
-  album: {
-    name: string;
-    images: { url: string }[];
-  };
-  duration_ms: number;
+interface SpotifyImage {
+  url: string;
+  height: number;
+  width: number;
 }
 
-interface AutoPlaylist {
+interface SpotifyArtist {
   id: string;
   name: string;
-  description: string;
-  tracks: Track[];
-  isEditing: boolean;
+  uri: string;
+  href: string;
+  external_urls: { spotify: string };
+  type: 'artist';
+}
+
+interface SpotifyAlbum {
+  id: string;
+  name: string;
+  images: SpotifyImage[];
+  uri: string;
+  href: string;
+  external_urls: { spotify: string };
+  release_date: string;
+  release_date_precision: 'year' | 'month' | 'day';
+  album_type: 'album' | 'single' | 'compilation';
+  type: 'album';
+  artists: SpotifyArtist[];
+  total_tracks: number;
+}
+
+interface SpotifyTrack {
+  id: string;
+  name: string;
+  artists: SpotifyArtist[];
+  album: SpotifyAlbum;
+  duration_ms: number;
+  uri: string;
+  href: string;
+  external_ids: { [key: string]: string };
+  external_urls: { spotify: string };
+  popularity: number;
+  disc_number: number;
+  track_number: number;
+  explicit: boolean;
+  preview_url: string | null;
+  is_local: boolean;
+  type: 'track';
+  available_markets: string[];
+  restrictions?: { reason: string };
+}
+
+interface CurrentlyPlaying {
+  item: SpotifyTrack | null;
+  is_playing: boolean;
+  progress_ms: number | null;
 }
 
 interface AudioFeatures {
@@ -46,17 +79,6 @@ interface AudioFeatures {
   tempo: number;
 }
 
-interface TrackWithFeatures extends Track {
-  audioFeatures?: AudioFeatures;
-  added_at?: string;
-}
-
-interface CurrentlyPlaying {
-  item: Track | null;
-  is_playing: boolean;
-  progress_ms: number;
-}
-
 interface AudioAnalysis {
   tempo: number;
   key: number;
@@ -64,187 +86,228 @@ interface AudioAnalysis {
   time_signature: number;
 }
 
+interface AutoPlaylist {
+  id: string;
+  name: string;
+  description: string;
+  tracks: SpotifyTrack[];
+  isEditing: boolean;
+}
+
+interface NowPlayingProps {
+  currentTrack: SpotifyTrack;
+  isPlaying: boolean;
+  onPlaybackChange: () => Promise<void>;
+  onGetSimilar: () => Promise<void>;
+  onAddToLiked: () => Promise<void>;
+}
+
+interface PlaylistModalData {
+  name: string;
+  description: string;
+  tracks: SpotifyTrack[];
+}
+
+const CACHE_KEYS = {
+  CURRENT_TRACK: 'spotify_current_track',
+  TOP_GENRES: 'spotify_top_genres',
+  RECENTLY_PLAYED: 'spotify_recently_played',
+  LAST_FETCH: 'spotify_dashboard_last_fetch'
+} as const;
+
+const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
+const PLAYBACK_POLL_INTERVAL = 5000; // 5 seconds
+const BACKGROUND_POLL_INTERVAL = 30000; // 30 seconds
+
 const Dashboard = () => {
   const [autoPlaylists, setAutoPlaylists] = useState<AutoPlaylist[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingPlaylist, setSavingPlaylist] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(true);
-  const { user, token, refreshAuth } = useAuth();
-  const navigate = useNavigate();
-  const [currentlyPlaying, setCurrentlyPlaying] = useState<CurrentlyPlaying | null>(null);
+  const [currentlyPlaying, setCurrentlyPlaying] = useState<CurrentlyPlaying | null>(() => {
+    const cached = localStorage.getItem(CACHE_KEYS.CURRENT_TRACK);
+    return cached ? JSON.parse(cached) : null;
+  });
   const [isTrackModalOpen, setIsTrackModalOpen] = useState(false);
   const [trackDetails, setTrackDetails] = useState<{
     audioFeatures?: AudioFeatures;
     audioAnalysis?: AudioAnalysis;
   }>({});
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [playlistModalData, setPlaylistModalData] = useState<PlaylistModalData | null>(null);
+  const [tracks, setTracks] = useState<SpotifyTrack[]>([]);
+  
+  const { user, token, spotifyApi } = useAuth();
+  const navigate = useNavigate();
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const backgroundPollRef = useRef<NodeJS.Timeout | null>(null);
+  const isPollingRef = useRef(false);
 
-  useEffect(() => {
-    if (token) {
-      generatePersonalizedPlaylists();
-    }
-  }, [token]);
-
-  const fetchCurrentlyPlaying = async () => {
+  const fetchCurrentlyPlaying = useCallback(async (force = false) => {
+    if (!token || isPollingRef.current) return;
+    
     try {
-      if (!token) return;
-
-      // First, try to get the currently playing track
-      const response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
-        headers: { 
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-      });
+      isPollingRef.current = true;
+      const data = await spotifyApi.get('me/player');
       
-      // If no track is playing (204) or other error, try to get the playback state
-      if (response.status === 204) {
-        const playerResponse = await fetch('https://api.spotify.com/v1/me/player', {
-          headers: { 
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-        });
-
-        if (playerResponse.ok) {
-          const playerData = await playerResponse.json();
-          if (playerData && playerData.item) {
-            setCurrentlyPlaying({
-              item: playerData.item,
-              is_playing: playerData.is_playing,
-              progress_ms: playerData.progress_ms
-            });
-            return;
-          }
-        }
-        
+      if (!data || !data.item) {
         setCurrentlyPlaying(null);
+        localStorage.removeItem(CACHE_KEYS.CURRENT_TRACK);
         return;
       }
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.item) {
-          setCurrentlyPlaying({
-            item: data.item,
-            is_playing: data.is_playing,
-            progress_ms: data.progress_ms
-          });
-        }
-      } else if (response.status === 401) {
-        // Token expired or invalid
-        refreshAuth();
-      } else {
-        console.error('Failed to fetch currently playing:', response.status, response.statusText);
-      }
+      const newState = {
+        item: data.item,
+        is_playing: data.is_playing,
+        progress_ms: data.progress_ms
+      };
+
+      setCurrentlyPlaying(newState);
+      localStorage.setItem(CACHE_KEYS.CURRENT_TRACK, JSON.stringify(newState));
     } catch (error) {
       console.error('Failed to fetch currently playing:', error);
+    } finally {
+      isPollingRef.current = false;
     }
-  };
+  }, [token, spotifyApi]);
 
-  useEffect(() => {
-    fetchCurrentlyPlaying();
-    const interval = setInterval(fetchCurrentlyPlaying, 500); // Check every 500ms
-    return () => clearInterval(interval);
-  }, [token]); // Add token as dependency
-
-  const generatePersonalizedPlaylists = async () => {
+  const generatePersonalizedPlaylists = useCallback(async (force = false) => {
     try {
-      setIsGenerating(true);
-      if (!token) {
-        toast.error('Authentication required');
-        navigate('/login');
-        return;
-      }
-
-      // 1. Fetch user's liked tracks
-      const tracksResponse = await fetch('https://api.spotify.com/v1/me/tracks?limit=50', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      // Check cache first
+      const lastFetch = localStorage.getItem(CACHE_KEYS.LAST_FETCH);
+      const cachedPlaylists = localStorage.getItem(CACHE_KEYS.RECENTLY_PLAYED);
       
-      if (tracksResponse.status === 401 || tracksResponse.status === 403) {
-        // Token expired or insufficient permissions
-        toast.error(
-          tracksResponse.status === 401 
-            ? 'Session expired. Please login again.'
-            : 'Additional permissions required. Refreshing authentication...'
-        );
-        
-        // Use the new refreshAuth method from context
-        refreshAuth();
-        return;
-      }
-      
-      if (!tracksResponse.ok) {
-        throw new Error(`Failed to fetch tracks: ${tracksResponse.statusText}`);
-      }
-      
-      const tracksData = await tracksResponse.json();
-      const tracks: TrackWithFeatures[] = tracksData.items.map((item: any) => ({
-        ...item.track,
-        added_at: item.added_at
-      }));
-
-      // 2. Get audio features for all tracks
-      const featuresResponse = await fetch(
-        `https://api.spotify.com/v1/audio-features?ids=${tracks.map(t => t.id).join(',')}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
+      if (!force && lastFetch && cachedPlaylists) {
+        const timestamp = parseInt(lastFetch);
+        if (Date.now() - timestamp < CACHE_DURATION) {
+          setAutoPlaylists(JSON.parse(cachedPlaylists));
+          return;
         }
-      );
-      
-      if (!featuresResponse.ok) throw new Error('Failed to fetch audio features');
-      
-      const featuresData = await featuresResponse.json();
-      
-      // Combine tracks with their audio features
-      const tracksWithFeatures = tracks.map((track, index) => ({
-        ...track,
-        audioFeatures: featuresData.audio_features[index]
+      }
+
+      const tracksData = await spotifyApi.get('me/tracks?limit=50');
+      const tracks = tracksData.items.map((item: any) => ({
+        ...item.track,
+        type: 'track',
+        is_local: item.track.is_local || false,
+        disc_number: item.track.disc_number || 1,
+        track_number: item.track.track_number || 1,
+        explicit: item.track.explicit || false,
+        preview_url: item.track.preview_url || null,
+        popularity: item.track.popularity || 0,
+        available_markets: item.track.available_markets || [],
+        external_ids: item.track.external_ids || {},
+        external_urls: item.track.external_urls || { spotify: '' },
+        href: item.track.href || '',
+        uri: item.track.uri || '',
+        album: {
+          ...item.track.album,
+          type: 'album',
+          album_type: item.track.album.album_type || 'album',
+          release_date_precision: item.track.album.release_date_precision || 'day',
+          total_tracks: item.track.album.total_tracks || 1,
+          uri: item.track.album.uri || '',
+          href: item.track.album.href || '',
+          external_urls: item.track.album.external_urls || { spotify: '' },
+          artists: item.track.album.artists.map((artist: any) => ({
+            ...artist,
+            type: 'artist',
+            uri: artist.uri || '',
+            href: artist.href || '',
+            external_urls: artist.external_urls || { spotify: '' }
+          }))
+        },
+        artists: item.track.artists.map((artist: any) => ({
+          ...artist,
+          type: 'artist',
+          uri: artist.uri || '',
+          href: artist.href || '',
+          external_urls: artist.external_urls || { spotify: '' }
+        }))
       }));
 
-      // 3. Generate playlists
       const generatedPlaylists = [
         {
           id: 'recent',
           name: 'Recently Added',
           description: 'Your latest musical discoveries',
-          tracks: tracksWithFeatures.slice(0, 20),
-          isEditing: false
-        },
-        {
-          id: 'energetic',
-          name: 'High Energy Mix',
-          description: 'Perfect for workouts and parties',
-          tracks: tracksWithFeatures
-            .filter(track => track.audioFeatures?.energy > 0.7)
-            .slice(0, 20),
-          isEditing: false
-        },
-        {
-          id: 'chill',
-          name: 'Chill Vibes',
-          description: 'Relaxing tracks for unwinding',
-          tracks: tracksWithFeatures
-            .filter(track => 
-              track.audioFeatures?.energy < 0.5 && 
-              track.audioFeatures?.valence > 0.5
-            )
-            .slice(0, 20),
+          tracks: tracks.slice(0, 20),
           isEditing: false
         }
       ];
 
       setAutoPlaylists(generatedPlaylists);
+      
+      // Update cache
+      localStorage.setItem(CACHE_KEYS.RECENTLY_PLAYED, JSON.stringify(generatedPlaylists));
+      localStorage.setItem(CACHE_KEYS.LAST_FETCH, Date.now().toString());
     } catch (error) {
       console.error('Failed to generate playlists:', error);
-      toast.error('Failed to generate playlists', {
-        description: error instanceof Error ? error.message : 'Please try again later'
-      });
-    } finally {
-      setIsGenerating(false);
-      setLoading(false);
+      toast.error('Failed to load your music data');
     }
-  };
+  }, [spotifyApi]);
+
+  // Initial data load
+  useEffect(() => {
+    if (!token) {
+      navigate('/');
+      return;
+    }
+
+    const initializeDashboard = async () => {
+      setLoading(true);
+      try {
+        await Promise.all([
+          generatePersonalizedPlaylists(),
+          fetchCurrentlyPlaying(true)
+        ]);
+      } catch (error) {
+        console.error('Dashboard initialization error:', error);
+        toast.error('Failed to load dashboard data');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initializeDashboard();
+  }, [token, navigate, generatePersonalizedPlaylists, fetchCurrentlyPlaying]);
+
+  // Set up polling
+  useEffect(() => {
+    if (!token) return;
+
+    // Active tab polling
+    pollIntervalRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchCurrentlyPlaying();
+      }
+    }, PLAYBACK_POLL_INTERVAL);
+
+    // Background polling
+    backgroundPollRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        generatePersonalizedPlaylists();
+      }
+    }, BACKGROUND_POLL_INTERVAL);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchCurrentlyPlaying(true);
+        generatePersonalizedPlaylists();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      if (backgroundPollRef.current) clearInterval(backgroundPollRef.current);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [token, fetchCurrentlyPlaying, generatePersonalizedPlaylists]);
+
+  const handlePlaybackChange = useCallback(async () => {
+    await fetchCurrentlyPlaying(true);
+  }, [fetchCurrentlyPlaying]);
 
   const handleEditName = (playlistId: string) => {
     setAutoPlaylists(playlists => 
@@ -262,56 +325,60 @@ const Dashboard = () => {
     );
   };
 
-  const saveToSpotify = async (playlist: AutoPlaylist) => {
+  const showToast = (
+    type: 'success' | 'error' | 'loading',
+    message: string,
+    description?: string | React.ReactNode
+  ) => {
+    const id = `toast-${Date.now()}`;
+    
+    switch (type) {
+      case 'loading':
+        toast.loading(message, { id, description });
+        break;
+      case 'success':
+        toast.success(message, { id, description });
+        break;
+      case 'error':
+        toast.error(message, { id, description });
+        break;
+    }
+    
+    return id;
+  };
+
+  const handleSavePlaylist = async () => {
+    const loadingToastId = showToast('loading', 'Creating playlist...', 'Please wait while we set everything up');
+
     try {
-      setSavingPlaylist(playlist.id);
-      toast.loading('Creating your playlist...', { id: 'save-playlist' });
-      
+      if (!token || !user?.id) {
+        toast.dismiss(loadingToastId);
+        showToast('error', 'Authentication Error', 'Please log in to save playlists');
+        return;
+      }
+
       // Create playlist
-      const createResponse = await fetch(`https://api.spotify.com/v1/users/${user?.id}/playlists`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: playlist.name,
-          description: playlist.description,
-          public: false
-        })
+      const playlistData = await spotifyApi.post(`users/${user.id}/playlists`, {
+        name: playlistModalData?.name || 'Discovered Tracks',
+        description: playlistModalData?.description || 'Generated playlist based on your music taste',
+        public: false
       });
 
-      if (!createResponse.ok) {
-        throw new Error('Failed to create playlist');
-      }
-
-      const newPlaylist = await createResponse.json();
-      
       // Add tracks to playlist
-      const addTracksResponse = await fetch(`https://api.spotify.com/v1/playlists/${newPlaylist.id}/tracks`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          uris: playlist.tracks.map(track => `spotify:track:${track.id}`)
-        })
+      const trackUris = tracks.map((track: SpotifyTrack) => `spotify:track:${track.id}`);
+      await spotifyApi.post(`playlists/${playlistData.id}/tracks`, {
+        uris: trackUris
       });
-
-      if (!addTracksResponse.ok) {
-        throw new Error('Failed to add tracks to playlist');
-      }
 
       // Show success toast
-      toast.dismiss('save-playlist');
+      toast.dismiss(loadingToastId);
       toast.success('Playlist Created!', {
         description: (
           <div className="space-y-2">
-            <p className="font-medium">{playlist.name}</p>
-            <p className="text-sm text-gray-400">{playlist.tracks.length} tracks added</p>
+            <p className="font-medium">{playlistData.name}</p>
+            <p className="text-sm text-gray-400">{trackUris.length} tracks added</p>
             <a 
-              href={`https://open.spotify.com/playlist/${newPlaylist.id}`}
+              href={`https://open.spotify.com/playlist/${playlistData.id}`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-block mt-2 text-emerald-500 hover:text-emerald-400 transition-colors"
@@ -322,41 +389,21 @@ const Dashboard = () => {
         ),
         duration: 5000,
       });
-
     } catch (error) {
-      toast.dismiss('save-playlist');
+      toast.dismiss(loadingToastId);
       toast.error('Failed to Create Playlist', {
         description: 'Please try again later',
       });
-    } finally {
-      setSavingPlaylist(null);
     }
   };
 
   const handlePlayPause = async () => {
+    if (!token) return;
+    
     try {
-      if (!token) return;
-      
-      const endpoint = currentlyPlaying?.is_playing ? 'pause' : 'play';
-      const response = await fetch(
-        `https://api.spotify.com/v1/me/player/${endpoint}`,
-        {
-          method: 'PUT',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-        }
-      );
-
-      if (response.ok || response.status === 204) {
-        await fetchCurrentlyPlaying();
-      } else if (response.status === 401) {
-        refreshAuth();
-      } else {
-        console.error('Failed to toggle playback:', response.status, response.statusText);
-        toast.error('Failed to control playback. Make sure Spotify is active.');
-      }
+      const endpoint = currentlyPlaying?.is_playing ? 'me/player/pause' : 'me/player/play';
+      await spotifyApi.put(endpoint);
+      await fetchCurrentlyPlaying(true);
     } catch (error) {
       console.error('Failed to toggle playback:', error);
       toast.error('Failed to control playback');
@@ -364,26 +411,11 @@ const Dashboard = () => {
   };
 
   const handleSkipNext = async () => {
+    if (!token) return;
+    
     try {
-      if (!token) return;
-      
-      const response = await fetch(
-        'https://api.spotify.com/v1/me/player/next',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-        }
-      );
-
-      if (response.ok || response.status === 204) {
-        // Wait a bit for Spotify to update
-        setTimeout(fetchCurrentlyPlaying, 100);
-      } else if (response.status === 401) {
-        refreshAuth();
-      }
+      await spotifyApi.post('me/player/next');
+      setTimeout(() => fetchCurrentlyPlaying(true), 100);
     } catch (error) {
       console.error('Failed to skip track:', error);
       toast.error('Failed to skip track');
@@ -391,26 +423,11 @@ const Dashboard = () => {
   };
 
   const handleSkipPrevious = async () => {
+    if (!token) return;
+    
     try {
-      if (!token) return;
-      
-      const response = await fetch(
-        'https://api.spotify.com/v1/me/player/previous',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-        }
-      );
-
-      if (response.ok || response.status === 204) {
-        // Wait a bit for Spotify to update
-        setTimeout(fetchCurrentlyPlaying, 100);
-      } else if (response.status === 401) {
-        refreshAuth();
-      }
+      await spotifyApi.post('me/player/previous');
+      setTimeout(() => fetchCurrentlyPlaying(true), 100);
     } catch (error) {
       console.error('Failed to skip to previous track:', error);
       toast.error('Failed to skip to previous track');
@@ -418,19 +435,12 @@ const Dashboard = () => {
   };
 
   const fetchTrackDetails = async (trackId: string) => {
+    if (!token) return;
+    
     try {
-      const [featuresRes, analysisRes] = await Promise.all([
-        fetch(`https://api.spotify.com/v1/audio-features/${trackId}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-        fetch(`https://api.spotify.com/v1/audio-analysis/${trackId}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-      ]);
-
       const [features, analysis] = await Promise.all([
-        featuresRes.json(),
-        analysisRes.json()
+        spotifyApi.get(`audio-features/${trackId}`),
+        spotifyApi.get(`audio-analysis/${trackId}`)
       ]);
 
       setTrackDetails({
@@ -439,159 +449,138 @@ const Dashboard = () => {
       });
     } catch (error) {
       console.error('Failed to fetch track details:', error);
+      toast.error('Failed to load track details');
     }
   };
 
   const handleAddToLiked = async () => {
-    if (!currentlyPlaying?.item) return;
+    if (!currentlyPlaying?.item || !token) return;
     
     try {
-      // Show loading toast
       toast.loading('Adding to your Liked Songs...', { id: 'like-song' });
 
-      const checkResponse = await fetch(
-        `https://api.spotify.com/v1/me/tracks/contains?ids=${currentlyPlaying.item.id}`,
-        {
-          headers: { Authorization: `Bearer ${token}` }
-        }
-      );
-
-      const [isLiked] = await checkResponse.json();
+      const [isLiked] = await spotifyApi.get(`me/tracks/contains?ids=${currentlyPlaying.item.id}`);
 
       if (isLiked) {
         toast.dismiss('like-song');
         toast('Already in Your Library', {
           icon: '💚',
-          description: 'This track is already in your Liked Songs!',
+          description: 'This track is already in your Liked Songs!'
         });
         return;
       }
 
-      const response = await fetch(
-        `https://api.spotify.com/v1/me/tracks`,
-        {
-          method: 'PUT',
-          headers: { 
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            ids: [currentlyPlaying.item.id]
-          })
-        }
-      );
+      await spotifyApi.put('me/tracks', {
+        ids: [currentlyPlaying.item.id]
+      });
 
-      if (response.ok) {
-        toast.dismiss('like-song');
-        toast.success('Added to Your Library', {
-          icon: '🎵',
-          description: (
-            <div className="flex items-center gap-3">
-              <img 
-                src={currentlyPlaying.item.album.images[0]?.url} 
-                alt="" 
-                className="w-10 h-10 rounded"
-              />
-              <div>
-                <p className="font-medium">{currentlyPlaying.item.name}</p>
-                <p className="text-sm text-gray-400">{currentlyPlaying.item.artists[0].name}</p>
-              </div>
+      toast.dismiss('like-song');
+      toast.success('Added to Your Library', {
+        icon: '🎵',
+        description: (
+          <div className="flex items-center gap-3">
+            <img 
+              src={currentlyPlaying.item.album.images[0]?.url} 
+              alt="" 
+              className="w-10 h-10 rounded"
+            />
+            <div>
+              <p className="font-medium">{currentlyPlaying.item.name}</p>
+              <p className="text-sm text-gray-400">{currentlyPlaying.item.artists[0].name}</p>
             </div>
-          ),
-          duration: 4000,
-        });
-        setIsTrackModalOpen(false);
-      } else {
-        throw new Error('Failed to add to liked songs');
-      }
+          </div>
+        ),
+        duration: 4000
+      });
+      setIsTrackModalOpen(false);
     } catch (error) {
       toast.dismiss('like-song');
       toast.error('Failed to Add to Library', {
-        description: 'Please try again later',
+        description: 'Please try again later'
       });
     }
   };
 
+  const renderLoadingState = () => (
+    <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
+      <div className="text-center">
+        <Loader2 className="w-8 h-8 text-emerald-500 animate-spin mx-auto mb-4" />
+        <p className="text-gray-400">Analyzing your music taste...</p>
+      </div>
+    </div>
+  );
+
+  const renderSimilarSongsToast = (currentTrack: SpotifyTrack) => (
+    <div className="flex items-center gap-4">
+      <div className="relative">
+        <img 
+          src={currentTrack.album.images[0]?.url} 
+          alt="" 
+          className="w-12 h-12 rounded-lg shadow-md"
+        />
+        <div className="absolute inset-0 bg-emerald-500/20 rounded-lg animate-pulse" />
+      </div>
+      <div>
+        <p className="font-semibold text-white">Finding Similar Tracks</p>
+        <p className="text-sm text-gray-400">Analyzing "{currentTrack.name}"</p>
+      </div>
+      <div className="ml-auto">
+        <div className="w-5 h-5 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    </div>
+  );
+
+  const renderSuccessToast = (currentTrack: SpotifyTrack, tracksCount: number) => (
+    <div className="flex items-center gap-4">
+      <div className="relative">
+        <img 
+          src={currentTrack.album.images[0]?.url} 
+          alt="" 
+          className="w-12 h-12 rounded-lg shadow-md"
+        />
+        <div className="absolute bottom-0 right-0 bg-emerald-500 rounded-full p-1">
+          <ListMusic className="w-3 h-3 text-white" />
+        </div>
+      </div>
+      <div>
+        <p className="font-semibold text-white">Found Similar Tracks!</p>
+        <p className="text-sm text-gray-400">
+          {tracksCount} tracks discovered based on your selection
+        </p>
+      </div>
+    </div>
+  );
+
   const handleGetSimilarSongs = async () => {
-    if (!currentlyPlaying?.item) return;
+    if (!currentlyPlaying?.item || !token) return;
     setIsTrackModalOpen(false);
     
     try {
-      // Enhanced loading toast with animation
       toast.loading(
-        <div className="flex items-center gap-4">
-          <div className="relative">
-            <img 
-              src={currentlyPlaying.item.album.images[0]?.url} 
-              alt="" 
-              className="w-12 h-12 rounded-lg shadow-md"
-            />
-            <div className="absolute inset-0 bg-emerald-500/20 rounded-lg animate-pulse" />
-          </div>
-          <div>
-            <p className="font-semibold text-white">Finding Similar Tracks</p>
-            <p className="text-sm text-gray-400">Analyzing "{currentlyPlaying.item.name}"</p>
-          </div>
-          <div className="ml-auto">
-            <div className="w-5 h-5 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-          </div>
-        </div>,
+        renderSimilarSongsToast(currentlyPlaying.item),
         { id: 'similar-songs', duration: 10000 }
       );
 
       // Get audio features of current track
-      const featuresResponse = await fetch(
-        `https://api.spotify.com/v1/audio-features/${currentlyPlaying.item.id}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
+      const features = await spotifyApi.get(`audio-features/${currentlyPlaying.item.id}`);
 
-      const features = await featuresResponse.json();
-
-      // Get recommendations with audio feature targeting
-      const response = await fetch(
-        `https://api.spotify.com/v1/recommendations?` + new URLSearchParams({
+      // Get recommendations
+      const data = await spotifyApi.get(
+        `recommendations?${new URLSearchParams({
           seed_tracks: currentlyPlaying.item.id,
           target_energy: features.energy.toString(),
           target_danceability: features.danceability.toString(),
           target_valence: features.valence.toString(),
           limit: '100'
-        }),
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
+        })}`
       );
 
-      if (!response.ok) throw new Error('Failed to get recommendations');
-      
-      const data = await response.json();
-
-      // Enhanced success toast
       toast.dismiss('similar-songs');
       toast.success(
-        <div className="flex items-center gap-4">
-          <div className="relative">
-            <img 
-              src={currentlyPlaying.item.album.images[0]?.url} 
-              alt="" 
-              className="w-12 h-12 rounded-lg shadow-md"
-            />
-            <div className="absolute bottom-0 right-0 bg-emerald-500 rounded-full p-1">
-              <ListMusic className="w-3 h-3 text-white" />
-            </div>
-          </div>
-          <div>
-            <p className="font-semibold text-white">Found Similar Tracks!</p>
-            <p className="text-sm text-gray-400">
-              {data.tracks.length} tracks discovered based on your selection
-            </p>
-          </div>
-        </div>,
+        renderSuccessToast(currentlyPlaying.item, data.tracks.length),
         { duration: 3000 }
       );
-      
-      // Navigate to discover page with recommendations
+
       navigate('/discover', { 
         state: { 
           seedTrack: currentlyPlaying.item,
@@ -602,23 +591,13 @@ const Dashboard = () => {
         } 
       });
     } catch (error) {
+      console.error('Failed to get similar songs:', error);
       toast.dismiss('similar-songs');
-      toast.error(
-        <div className="flex items-center gap-4">
-          <div className="bg-red-500/10 p-3 rounded-lg">
-            <X className="w-6 h-6 text-red-500" />
-          </div>
-          <div>
-            <p className="font-semibold text-white">Failed to Find Similar Tracks</p>
-            <p className="text-sm text-gray-400">Please try again later</p>
-          </div>
-        </div>
-      );
+      toast.error('Failed to find similar tracks. Please try again later.');
     }
   };
 
   const handleNowPlayingClick = (e: React.MouseEvent) => {
-    // Check if the click target is a button or inside a button
     const isButton = (e.target as HTMLElement).closest('button');
     if (!isButton) {
       setIsTrackModalOpen(true);
@@ -629,14 +608,7 @@ const Dashboard = () => {
   };
 
   if (loading || isGenerating) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 text-emerald-500 animate-spin mx-auto mb-4" />
-          <p className="text-gray-400">Analyzing your music taste...</p>
-        </div>
-      </div>
-    );
+    return renderLoadingState();
   }
 
   console.log('Currently Playing:', currentlyPlaying);
@@ -700,84 +672,13 @@ const Dashboard = () => {
 
       {/* Now Playing Section */}
       {currentlyPlaying?.item && (
-        <div className="mb-12">
-          <div 
-            className="bg-gray-800/50 backdrop-blur-sm rounded-xl p-6 hover:bg-gray-800/60 transition-colors group cursor-pointer"
-            onClick={handleNowPlayingClick}
-          >
-            <h2 className="text-2xl font-bold text-white mb-6">Now Playing</h2>
-            <div className="flex items-center gap-6">
-              {/* Album Art */}
-              <div className="relative">
-                <img 
-                  src={currentlyPlaying.item.album.images[0]?.url}
-                  alt={currentlyPlaying.item.album.name}
-                  className="w-24 h-24 rounded-lg shadow-lg group-hover:shadow-emerald-500/20"
-                />
-                <div className="absolute inset-0 bg-black/20 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-
-              {/* Track Info */}
-              <div className="flex-1">
-                <h3 className="text-xl font-semibold text-white group-hover:text-emerald-500 transition-colors">
-                  {currentlyPlaying.item.name}
-                </h3>
-                <p className="text-gray-400">
-                  {currentlyPlaying.item.artists.map(a => a.name).join(', ')}
-                </p>
-              </div>
-
-              {/* Playback Controls */}
-              <div className="flex items-center gap-4">
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleSkipPrevious();
-                  }}
-                  className="p-2 rounded-full hover:bg-white/10 transition-colors"
-                >
-                  <SkipBack className="w-6 h-6 text-white" />
-                </button>
-                
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handlePlayPause();
-                  }}
-                  className="p-3 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white hover:scale-105 transition-all"
-                >
-                  {currentlyPlaying.is_playing ? (
-                    <Pause className="w-6 h-6" />
-                  ) : (
-                    <Play className="w-6 h-6" />
-                  )}
-                </button>
-                
-                <button 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleSkipNext();
-                  }}
-                  className="p-2 rounded-full hover:bg-white/10 transition-colors"
-                >
-                  <SkipForward className="w-6 h-6 text-white" />
-                </button>
-              </div>
-            </div>
-            
-            {/* Progress Bar */}
-            <div className="mt-4 px-2">
-              <div className="h-1 bg-gray-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-emerald-500 transition-all duration-1000"
-                  style={{ 
-                    width: `${(currentlyPlaying.progress_ms / currentlyPlaying.item.duration_ms) * 100}%` 
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
+        <NowPlaying
+          currentTrack={currentlyPlaying.item}
+          isPlaying={currentlyPlaying.is_playing}
+          onPlaybackChange={handlePlaybackChange}
+          onGetSimilar={handleGetSimilarSongs}
+          onAddToLiked={handleAddToLiked}
+        />
       )}
 
       {!currentlyPlaying && (

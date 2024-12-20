@@ -1,39 +1,65 @@
 import { useState, useEffect } from 'react';
-import { LikedTrack } from '../types/spotify'; // Create this type if not exists
+import { useAuth } from '@/contexts/AuthContext';
 
-export const useSpotifyTracks = () => {
-  const [tracks, setTracks] = useState<LikedTrack[]>([]);
+interface SpotifyTrack {
+  id: string;
+  name: string;
+  artists: Array<{ name: string }>;
+  album: {
+    name: string;
+    images: Array<{ url: string }>;
+  };
+  duration_ms: number;
+  uri: string;
+}
+
+interface SpotifyResponse {
+  items: Array<{
+    track: SpotifyTrack;
+    added_at: string;
+  }>;
+}
+
+export function useSpotifyTracks() {
+  const [tracks, setTracks] = useState<SpotifyTrack[]>([]);
   const [loading, setLoading] = useState(true);
+  const { token, refreshAuth } = useAuth();
 
   useEffect(() => {
-    const loadTracks = async () => {
+    const fetchTracks = async () => {
+      if (!token) {
+        setLoading(false);
+        return;
+      }
+
       try {
-        const metadata = localStorage.getItem('spotify_liked_songs_metadata');
-        if (!metadata) {
-          setLoading(false);
+        const response = await fetch('https://api.spotify.com/v1/me/tracks?limit=50', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.status === 401) {
+          await refreshAuth();
           return;
         }
 
-        const { chunks: chunkCount } = JSON.parse(metadata);
-        let allTracks: LikedTrack[] = [];
-
-        for (let i = 0; i < chunkCount; i++) {
-          const chunk = localStorage.getItem(`spotify_liked_songs_chunk_${i}`);
-          if (chunk) {
-            allTracks = [...allTracks, ...JSON.parse(chunk)];
-          }
+        if (!response.ok) {
+          throw new Error(`Failed to fetch tracks: ${response.statusText}`);
         }
 
-        setTracks(allTracks);
+        const data: SpotifyResponse = await response.json();
+        setTracks(data.items.map(item => item.track));
       } catch (error) {
-        console.error('Error loading tracks:', error);
+        console.error('Failed to fetch tracks:', error);
       } finally {
         setLoading(false);
       }
     };
 
-    loadTracks();
-  }, []);
+    fetchTracks();
+  }, [token, refreshAuth]);
 
   return { tracks, loading };
-}; 
+} 

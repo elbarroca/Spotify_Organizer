@@ -943,9 +943,30 @@ interface AudioPreview {
   isPlaying: boolean;
 }
 
+interface Artist {
+  genres?: string[];
+}
+
+interface Track {
+  id: string;
+}
+
+interface AudioFeatures {
+  danceability: number;
+  energy: number;
+  valence: number;
+  acousticness: number;
+  instrumentalness: number;
+}
+
+interface GenreCount {
+  name: string;
+  count: number;
+}
+
 const CriteriaSelection = () => {
   const navigate = useNavigate();
-  const { spotifyApi } = useAuth();
+  const { spotifyApi, token } = useAuth();
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [selectedTags, setSelectedTags] = useState<SpotifyTag[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -968,7 +989,7 @@ const CriteriaSelection = () => {
         // Get top artists for genres
         const topArtists = await spotifyApi.getMyTopArtists({ limit: 50, time_range: 'medium_term' });
         const genres = topArtists.body.items
-          .flatMap(artist => artist.genres || [])
+          .flatMap((artist: Artist) => artist.genres || [])
           .filter(Boolean);
         
         const genreCounts = genres.reduce<Record<string, number>>((acc, genre) => {
@@ -977,18 +998,21 @@ const CriteriaSelection = () => {
         }, {});
 
         const topGenres = Object.entries(genreCounts)
-          .map(([name, count]) => ({ name, count }))
+          .map(([name, count]) => ({ 
+            name, 
+            count: count as number 
+          }))
           .sort((a, b) => b.count - a.count)
           .slice(0, 8);
 
         // Get top tracks for audio features
         const topTracks = await spotifyApi.getMyTopTracks({ limit: 50, time_range: 'medium_term' });
-        const trackIds = topTracks.body.items.map(track => track.id);
+        const trackIds = topTracks.body.items.map((track: Track) => track.id);
         
         const featuresResponse = await spotifyApi.getAudioFeaturesForTracks(trackIds);
         const validFeatures = featuresResponse.body.audio_features.filter(Boolean);
         
-        const avgFeatures = validFeatures.reduce((acc, curr) => ({
+        const avgFeatures = validFeatures.reduce((acc: AudioFeatures, curr: AudioFeatures) => ({
           danceability: acc.danceability + curr.danceability,
           energy: acc.energy + curr.energy,
           valence: acc.valence + curr.valence,
@@ -1016,7 +1040,7 @@ const CriteriaSelection = () => {
         if (avgFeatures.instrumentalness > 0.7) traits.push('Instrumental Explorer');
 
         setUserPreferences({
-          topGenres,
+          topGenres: topGenres as { name: string; count: number }[],
           audioFeatures: avgFeatures,
           traits
         });
@@ -1025,10 +1049,10 @@ const CriteriaSelection = () => {
       }
     };
 
-    if (spotifyApi.getAccessToken()) {
+    if (token) {
       fetchUserPreferences();
     }
-  }, [spotifyApi]);
+  }, [token]);
 
   const handleCreatePlaylist = async () => {
     if (selectedTags.length === 0 || !userPreferences) {

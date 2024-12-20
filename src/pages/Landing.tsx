@@ -1,9 +1,21 @@
 import { useAuth } from "../contexts/AuthContext";
-import { Music, Shuffle, ListMusic, ArrowRight, Github, Settings } from 'lucide-react';
+import { Music, Shuffle, ListMusic, Github, Settings } from 'lucide-react';
 import { FaSpotify } from 'react-icons/fa';
+import { useEffect } from 'react';
+import { toast } from 'react-hot-toast';
 
-export default function Landing() {
+interface LandingProps {
+  error?: string;
+}
+
+export default function Landing({ error }: LandingProps) {
   const { login } = useAuth();
+
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+    }
+  }, [error]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black">

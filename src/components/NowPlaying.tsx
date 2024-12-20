@@ -1,90 +1,77 @@
-import { Music, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
+import { Music, Pause, Play, SkipBack, SkipForward, Heart, ListMusic } from 'lucide-react';
 import { cn } from '@/utils/cn';
+import { spotifyClient } from '@/lib/spotify-api';
+import { useCallback } from 'react';
+import { toast } from 'sonner';
+import { SpotifyTrack, SpotifyAlbum } from '@/types/spotify';
 
 interface NowPlayingProps {
-  currentTrack: {
-    title: string;
-    artist: string;
-    imageUrl: string;
-  } | null;
+  currentTrack: SpotifyTrack | null;
   isPlaying: boolean;
-  onPlayPause: () => void;
-  onNext: () => void;
-  onPrevious: () => void;
+  onPlaybackChange: () => Promise<void>;
+  onGetSimilar: () => Promise<void>;
+  onAddToLiked: () => Promise<void>;
 }
 
-export const NowPlaying = ({
+export const NowPlaying: React.FC<NowPlayingProps> = ({
   currentTrack,
-  isPlaying = false,
-  onPlayPause,
-  onNext,
-  onPrevious,
-}: NowPlayingProps) => {
-  if (!currentTrack) return null;
+  isPlaying,
+  onPlaybackChange,
+  onGetSimilar,
+  onAddToLiked
+}) => {
+  if (!currentTrack || !currentTrack.album) {
+    return null;
+  }
+
+  const albumImage = currentTrack.album.images?.[0]?.url || '/album-placeholder.png';
 
   return (
-    <div className="px-4 py-3 border-t border-white/10 bg-black/60 backdrop-blur-xl">
-      <div className="flex items-center gap-3">
-        {/* Album Art */}
-        <div className="relative flex-shrink-0">
-          {currentTrack.imageUrl ? (
-            <img
-              src={currentTrack.imageUrl}
-              alt={currentTrack.title}
-              className="w-12 h-12 rounded-lg object-cover shadow-lg shadow-emerald-500/20"
-            />
-          ) : (
-            <div className="w-12 h-12 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-              <Music className="w-6 h-6 text-emerald-400" />
+    <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-black to-black/95 backdrop-blur-lg border-t border-white/5 p-4">
+      <div className="max-w-screen-xl mx-auto flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <img 
+            src={albumImage}
+            alt={currentTrack.name}
+            className="w-14 h-14 rounded-md"
+          />
+          <div>
+            <div className="font-medium text-white">{currentTrack.name}</div>
+            <div className="text-sm text-gray-400">
+              {currentTrack.artists.map(artist => artist.name).join(', ')}
             </div>
-          )}
+          </div>
         </div>
 
-        {/* Track Info */}
-        <div className="flex-1 min-w-0">
-          <h4 className="text-sm font-medium text-white truncate">
-            {currentTrack.title}
-          </h4>
-          <p className="text-xs text-gray-400 truncate">
-            {currentTrack.artist}
-          </p>
-        </div>
-
-        {/* Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-4">
           <button
-            onClick={onPrevious}
-            className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-gray-400 hover:text-emerald-300 transition-all duration-300"
-            aria-label="Previous track"
-          >
-            <SkipBack className="w-4 h-4" />
-          </button>
-          
-          <button
-            onClick={onPlayPause}
-            className={cn(
-              "p-2 rounded-lg transition-all duration-300",
-              "bg-emerald-500/10 hover:bg-emerald-500/20",
-              "text-emerald-300 hover:text-emerald-200"
-            )}
-            aria-label={isPlaying ? "Pause" : "Play"}
+            onClick={onPlaybackChange}
+            className="p-3 bg-white rounded-full hover:scale-105 transition-transform"
           >
             {isPlaying ? (
-              <Pause className="w-4 h-4" />
+              <Pause className="w-5 h-5 text-black" />
             ) : (
-              <Play className="w-4 h-4" />
+              <Play className="w-5 h-5 text-black" />
             )}
           </button>
 
           <button
-            onClick={onNext}
-            className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-gray-400 hover:text-emerald-300 transition-all duration-300"
-            aria-label="Next track"
+            onClick={onAddToLiked}
+            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+            title="Add to Liked Songs"
           >
-            <SkipForward className="w-4 h-4" />
+            <Heart className="w-5 h-5" />
+          </button>
+
+          <button
+            onClick={onGetSimilar}
+            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+            title="Find Similar Songs"
+          >
+            <ListMusic className="w-5 h-5" />
           </button>
         </div>
       </div>
     </div>
   );
-}; 
+};
