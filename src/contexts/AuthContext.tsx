@@ -22,6 +22,9 @@ const CACHE_DURATION = 30 * 60 * 1000;
 // Check interval for token refresh (5 minutes)
 const CHECK_INTERVAL = 5 * 60 * 1000;
 
+// Minimum time between token refreshes (1 minute)
+const MIN_REFRESH_INTERVAL = 60 * 1000;
+
 interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -56,8 +59,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => 
     secureStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN)
   );
+  
   const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isRefreshingRef = useRef(false);
+  const lastRefreshTimeRef = useRef<number>(0);
   const requestQueueRef = useRef<Map<string, Promise<any>>>(new Map());
 
   const client = useMemo(() => 
@@ -70,114 +75,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const account = useMemo(() => new Account(client), [client]);
   const databases = useMemo(() => new Databases(client), [client]);
 
-  // Spotify API wrapper with request deduplication and caching
-  const spotifyApi = useMemo(() => {
-    const baseUrl = 'https://api.spotify.com/v1';
-    
-    const makeRequest = async (
-      method: string,
-      endpoint: string,
-      body?: any,
-      forceRefresh = false
-    ) => {
-      const cacheKey = `${method}:${endpoint}`;
-      const now = Date.now();
-      const lastFetch = localStorage.getItem(`${STORAGE_KEYS.LAST_FETCH}:${cacheKey}`);
-      const cachedData = localStorage.getItem(`cache:${cacheKey}`);
-
-      // Return cached data if valid and not forcing refresh
-      if (
-        !forceRefresh &&
-        lastFetch &&
-        cachedData &&
-        now - parseInt(lastFetch) < CACHE_DURATION
-      ) {
-        return JSON.parse(cachedData);
-      }
-
-      // Check if there's already a request in progress for this endpoint
-      const existingRequest = requestQueueRef.current.get(cacheKey);
-      if (existingRequest) {
-        return existingRequest;
-      }
-
-      const makeApiCall = async (retryCount = 0): Promise<any> => {
-        try {
-          let currentToken = secureStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
-          
-          // If no token or token is expired, try to refresh
-          if (!currentToken || secureStorage.shouldRefreshToken()) {
-            console.log('Token missing or expired, attempting refresh...');
-            currentToken = await refreshSpotifyToken();
-          }
-
-          if (!currentToken) {
-            console.error('No valid token available after refresh attempt');
-            throw new Error('No valid token');
-          }
-
-          const response = await fetch(`${baseUrl}${endpoint}`, {
-            method,
-            headers: {
-              'Authorization': `Bearer ${currentToken}`,
-              'Content-Type': 'application/json',
-            },
-            ...(body ? { body: JSON.stringify(body) } : {})
-          });
-
-          if (!response.ok) {
-            if (response.status === 401 && retryCount < 1) {
-              console.log('Token expired during request, refreshing...');
-              currentToken = await refreshSpotifyToken();
-              if (currentToken) {
-                return makeApiCall(retryCount + 1);
-              }
-            }
-
-            if (response.status === 429) {
-              const retryAfter = parseInt(response.headers.get('Retry-After') || '1');
-              await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-              return makeApiCall(retryCount);
-            }
-
-            throw new Error(`API call failed: ${response.statusText}`);
-          }
-
-          const data = await response.json();
-          
-          // Cache successful GET requests
-          if (method === 'GET') {
-            localStorage.setItem(`cache:${cacheKey}`, JSON.stringify(data));
-            localStorage.setItem(`${STORAGE_KEYS.LAST_FETCH}:${cacheKey}`, now.toString());
-          }
-
-          return data;
-        } catch (error) {
-          console.error('API call error:', error);
-          throw error;
-        }
-      };
-
-      const request = makeApiCall();
-      requestQueueRef.current.set(cacheKey, request);
-
-      try {
-        return await request;
-      } finally {
-        requestQueueRef.current.delete(cacheKey);
-      }
-    };
-
-    return {
-      get: (endpoint: string) => makeRequest('GET', endpoint),
-      post: (endpoint: string, body?: any) => makeRequest('POST', endpoint, body),
-      put: (endpoint: string, body?: any) => makeRequest('PUT', endpoint, body),
-      delete: (endpoint: string) => makeRequest('DELETE', endpoint)
-    };
-  }, []);
-
   const clearTokens = useCallback(() => {
     secureStorage.clearAll();
+    localStorage.removeItem(STORAGE_KEYS.USER_DATA);
   }, []);
 
   const updateTokens = useCallback((accessToken: string | null, refreshToken: string | null, expiresIn: number) => {
@@ -192,159 +92,91 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(accessToken);
   }, [clearTokens]);
 
-  const scheduleTokenRefresh = useCallback((expiresIn: number) => {
-    if (refreshTimeoutRef.current) {
-      clearTimeout(refreshTimeoutRef.current);
+  // Enhanced token refresh logic with rate limiting
+  const refreshSpotifyToken = useCallback(async () => {
+    // Check if we've refreshed recently
+    const now = Date.now();
+    if (now - lastRefreshTimeRef.current < MIN_REFRESH_INTERVAL) {
+      console.log('Token refresh attempted too soon, skipping');
+      return token;
     }
 
-    // Schedule refresh 5 minutes before expiration
-    const refreshDelay = Math.max(0, (expiresIn - 300) * 1000);
-    refreshTimeoutRef.current = setTimeout(() => {
-      if (secureStorage.shouldRefreshToken()) {
-        refreshSpotifyToken();
-      }
-    }, refreshDelay);
-  }, []);
-
-  const refreshSpotifyToken = useCallback(async () => {
     if (isRefreshingRef.current) {
-      console.log('Token refresh already in progress');
-      // Wait for the current refresh to complete
-      while (isRefreshingRef.current) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      return secureStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+      const existingRefresh = requestQueueRef.current.get('token_refresh');
+      if (existingRefresh) return existingRefresh;
     }
 
     const refreshToken = secureStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
     if (!refreshToken) {
-      console.log('No refresh token available');
       clearTokens();
-      setUser(null);
-      setToken(null);
       return null;
     }
 
-    try {
-      isRefreshingRef.current = true;
-      console.log('Refreshing Spotify token...');
+    isRefreshingRef.current = true;
+    lastRefreshTimeRef.current = now;
 
-      const credentials = btoa(`${appwriteConfig.spotifyClientId}:${appwriteConfig.spotifyClientSecret}`);
-      const response = await fetch('https://accounts.spotify.com/api/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': `Basic ${credentials}`
-        },
-        body: new URLSearchParams({
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken
-        })
-      });
+    const refreshPromise = (async () => {
+      try {
+        const response = await fetch('https://accounts.spotify.com/api/token', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': `Basic ${btoa(`${appwriteConfig.spotifyClientId}:${appwriteConfig.spotifyClientSecret}`)}`,
+          },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken,
+          }),
+        });
 
-      if (!response.ok) {
-        const error = await response.json();
-        console.error('Token refresh failed:', error);
-        throw new Error(error.error_description || 'Failed to refresh token');
-      }
-
-      const data = await response.json();
-      console.log('Token refresh successful');
-      
-      // Update tokens
-      const newAccessToken = data.access_token;
-      const newRefreshToken = data.refresh_token || refreshToken;
-      const expiresIn = data.expires_in;
-      
-      updateTokens(
-        newAccessToken,
-        newRefreshToken,
-        expiresIn
-      );
-      
-      // Update the user document if we have one
-      if (user?.$id) {
-        try {
-          const updatedUser = await databases.updateDocument<SpotifyUser>(
-            appwriteConfig.databaseId,
-            appwriteConfig.usersCollectionId,
-            user.$id,
-            {
-              spotifyAccessToken: newAccessToken,
-              spotifyTokenExpiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
-              updatedAt: new Date().toISOString()
-            }
-          );
-          setUser(updatedUser);
-        } catch (error) {
-          console.error('Failed to update user document:', error);
-          // Continue even if user document update fails
+        if (!response.ok) {
+          throw new Error('Failed to refresh token');
         }
+
+        const data = await response.json();
+        updateTokens(data.access_token, data.refresh_token || refreshToken, data.expires_in);
+        return data.access_token;
+      } catch (error) {
+        console.error('Token refresh failed:', error);
+        clearTokens();
+        setUser(null);
+        setToken(null);
+        throw error;
+      } finally {
+        isRefreshingRef.current = false;
+        requestQueueRef.current.delete('token_refresh');
       }
+    })();
 
-      scheduleTokenRefresh(expiresIn);
-      return newAccessToken;
-    } catch (error) {
-      console.error('Token refresh failed:', error);
-      clearTokens();
-      setUser(null);
-      setToken(null);
-      return null;
-    } finally {
-      isRefreshingRef.current = false;
-    }
-  }, [user, databases, scheduleTokenRefresh, updateTokens, clearTokens]);
+    requestQueueRef.current.set('token_refresh', refreshPromise);
+    return refreshPromise;
+  }, [token, clearTokens, updateTokens]);
 
+  // Move checkAuth declaration before its usage
   const checkAuth = useCallback(async (force = false) => {
     try {
       const storedToken = secureStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
       const expiresAt = secureStorage.getItem(STORAGE_KEYS.EXPIRES_AT);
       const now = new Date().getTime();
       
-      // Check if token exists and is not expired
       if (storedToken && expiresAt && new Date(expiresAt).getTime() > now && !force) {
+        setToken(storedToken);
         if (!user) {
           const cachedUser = localStorage.getItem(STORAGE_KEYS.USER_DATA);
           if (cachedUser) {
             setUser(JSON.parse(cachedUser));
-            setToken(storedToken);
             setIsLoading(false);
             return;
-          }
-
-          // Fetch user data if not cached
-          const currentUser = await account.get();
-          const userDocs = await databases.listDocuments<SpotifyUser>(
-            appwriteConfig.databaseId,
-            appwriteConfig.usersCollectionId,
-            [Query.equal('userId', currentUser.$id)]
-          );
-
-          if (userDocs.documents.length > 0) {
-            const userData = userDocs.documents[0];
-            setUser(userData);
-            setToken(storedToken);
-            localStorage.setItem(STORAGE_KEYS.USER_DATA, JSON.stringify(userData));
           }
         }
         return;
       }
 
-      // Token is expired or force refresh is requested
       if (secureStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN)) {
         const newToken = await refreshSpotifyToken();
-        if (newToken) {
-          // Schedule next token refresh
-          const newExpiresAt = secureStorage.getItem(STORAGE_KEYS.EXPIRES_AT);
-          if (newExpiresAt) {
-            const expiresIn = Math.floor((new Date(newExpiresAt).getTime() - now) / 1000);
-            scheduleTokenRefresh(expiresIn);
-          }
-          return;
-        }
+        if (newToken) return;
       }
 
-      // Clear auth state if no valid credentials
       clearTokens();
       setUser(null);
       setToken(null);
@@ -356,7 +188,139 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [account, databases, refreshSpotifyToken, user, scheduleTokenRefresh, clearTokens]);
+  }, [user, refreshSpotifyToken, clearTokens]);
+
+  // Enhanced initialization
+  useEffect(() => {
+    const initializeAuth = async () => {
+      try {
+        setIsLoading(true);
+        const currentToken = secureStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN);
+        
+        if (currentToken) {
+          // Verify token and fetch user data
+          await checkAuth();
+        } else {
+          // No token found, try refreshing if refresh token exists
+          const refreshToken = secureStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN);
+          if (refreshToken) {
+            const newToken = await refreshSpotifyToken();
+            if (newToken) {
+              await checkAuth(true);
+            } else {
+              throw new Error('Failed to refresh token');
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Auth initialization failed:', error);
+        clearTokens();
+        setUser(null);
+        setToken(null);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    initializeAuth();
+  }, [checkAuth, refreshSpotifyToken, clearTokens]);
+
+  // Spotify API wrapper with request deduplication and caching
+  const spotifyApi = useMemo(() => {
+    const baseUrl = 'https://api.spotify.com/v1';
+    
+    const makeApiCall = async (endpoint: string, options: RequestInit = {}) => {
+      try {
+        const token = await refreshSpotifyToken();
+        if (!token) {
+          throw new Error('No valid token available');
+        }
+
+        // Ensure endpoint starts with a forward slash if not present
+        const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+        const response = await fetch(`https://api.spotify.com/v1${normalizedEndpoint}`, {
+          ...options,
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            ...options.headers
+          }
+        });
+
+        // Handle different response statuses
+        if (response.status === 204) {
+          return null;
+        }
+
+        if (response.status === 404) {
+          console.error(`Endpoint not found: ${normalizedEndpoint}`);
+          throw new Error(`API endpoint not found: ${normalizedEndpoint}`);
+        }
+
+        if (response.status === 401) {
+          // Token expired, try to refresh
+          const newToken = await refreshSpotifyToken();
+          if (!newToken) {
+            throw new Error('Failed to refresh token');
+          }
+
+          // Retry with new token
+          const retryResponse = await fetch(`https://api.spotify.com/v1${normalizedEndpoint}`, {
+            ...options,
+            headers: {
+              'Authorization': `Bearer ${newToken}`,
+              'Content-Type': 'application/json',
+              ...options.headers
+            }
+          });
+
+          if (!retryResponse.ok) {
+            const error = await retryResponse.json();
+            throw new Error(error.error?.message || `HTTP error! status: ${retryResponse.status}`);
+          }
+
+          return retryResponse.json();
+        }
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error?.message || `HTTP error! status: ${response.status}`);
+        }
+
+        return response.json();
+      } catch (error) {
+        console.error('API call error:', error);
+        throw error;
+      }
+    };
+
+    const makeRequest = async (endpoint: string, options: RequestInit = {}) => {
+      try {
+        return await makeApiCall(endpoint, options);
+      } catch (error) {
+        if (error instanceof Error) {
+          if (error.message.includes('Failed to refresh token') || 
+              error.message.includes('No valid token available')) {
+            // Clear auth state and redirect to login
+            clearTokens();
+            setUser(null);
+            setToken(null);
+            toast.error('Session expired. Please log in again.');
+            window.location.href = '/';
+            return null;
+          }
+        }
+        throw error;
+      }
+    };
+
+    return {
+      get: (endpoint: string) => makeRequest(endpoint),
+      post: (endpoint: string, body?: any) => makeRequest(endpoint, { method: 'POST', body: JSON.stringify(body) }),
+      put: (endpoint: string, body?: any) => makeRequest(endpoint, { method: 'PUT', body: JSON.stringify(body) }),
+      delete: (endpoint: string) => makeRequest(endpoint, { method: 'DELETE' })
+    };
+  }, []);
 
   const login = useCallback(async () => {
     try {
@@ -393,7 +357,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     checkAuth(true);
     
-    // Set up periodic checks
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         checkAuth();
@@ -422,12 +385,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isLoading,
     user,
     token,
-    refreshAuth,
+    refreshAuth: checkAuth,
     login,
     logout,
     refreshSpotifyToken,
     spotifyApi
-  }), [isLoading, user, token, refreshAuth, login, logout, refreshSpotifyToken, spotifyApi]);
+  }), [isLoading, user, token, checkAuth, login, logout, refreshSpotifyToken, spotifyApi]);
 
   return (
     <AuthContext.Provider value={value}>

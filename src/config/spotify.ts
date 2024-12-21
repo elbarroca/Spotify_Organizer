@@ -11,7 +11,11 @@ export const SPOTIFY_CONFIG = {
     'playlist-modify-public',
     'playlist-modify-private',
     'user-library-read',
-    'user-library-modify'
+    'user-library-modify',
+    'user-read-playback-state',
+    'user-modify-playback-state',
+    'user-read-currently-playing',
+    'user-read-recently-played'
   ]
 } as const;
 

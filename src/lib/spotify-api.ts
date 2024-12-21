@@ -161,11 +161,26 @@ class SpotifyClient {
         }
       });
 
+      // Handle 204 No Content
+      if (response.status === 204) {
+        return null as T;
+      }
+
+      // Handle 404 Not Found
+      if (response.status === 404) {
+        console.log(`Resource not found: ${endpoint}`);
+        return null as T;
+      }
+
       if (response.status === 401) {
         // Token might have expired during the request
         console.log('Token expired during request, refreshing...');
         const newToken = await this.refreshAccessToken();
         
+        if (!newToken) {
+          throw new Error('Failed to refresh token');
+        }
+
         const retryResponse = await fetch(`https://api.spotify.com/v1/${endpoint}`, {
           ...options,
           headers: {
@@ -174,6 +189,16 @@ class SpotifyClient {
             ...options.headers
           }
         });
+
+        // Handle 204 and 404 for retry request
+        if (retryResponse.status === 204) {
+          return null as T;
+        }
+
+        if (retryResponse.status === 404) {
+          console.log(`Resource not found after token refresh: ${endpoint}`);
+          return null as T;
+        }
 
         if (!retryResponse.ok) {
           const error = await retryResponse.json();
@@ -190,33 +215,78 @@ class SpotifyClient {
 
       return response.json();
     } catch (error) {
-      console.error('Spotify API request failed:', error);
+      console.error('Spotify API request failed:', {
+        endpoint,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
+      });
       
       if (error instanceof Error) {
-        if (error.message.includes('Not authenticated') || error.message.includes('Failed to refresh token')) {
+        if (error.message.includes('Not authenticated') || 
+            error.message.includes('Failed to refresh token') ||
+            error.message.includes('The access token expired')) {
           this.clearTokens();
           this.redirectToLogin();
         }
-        throw error;
       }
       
-      throw new Error('An unexpected error occurred');
+      throw error;
     }
   }
 
   // Utility methods for common Spotify API endpoints
   public async getCurrentUser() {
-    return this.request<SpotifyApi.CurrentUsersProfileResponse>('me');
+    try {
+      return await this.request<SpotifyApi.CurrentUsersProfileResponse>('me');
+    } catch (error) {
+      console.error('Failed to get current user:', error);
+      throw error;
+    }
   }
 
   public async getUserPlaylists(limit = 50) {
-    return this.request<SpotifyApi.ListOfUsersPlaylistsResponse>(`me/playlists?limit=${limit}`);
+    try {
+      return await this.request<SpotifyApi.ListOfUsersPlaylistsResponse>(`me/playlists?limit=${limit}`);
+    } catch (error) {
+      console.error('Failed to get user playlists:', error);
+      throw error;
+    }
   }
 
   public async getPlaylistTracks(playlistId: string, limit = 100) {
-    return this.request<SpotifyApi.PlaylistTrackResponse>(
-      `playlists/${playlistId}/tracks?limit=${limit}`
-    );
+    try {
+      return await this.request<SpotifyApi.PlaylistTrackResponse>(
+        `playlists/${playlistId}/tracks?limit=${limit}`
+      );
+    } catch (error) {
+      console.error('Failed to get playlist tracks:', error);
+      throw error;
+    }
+  }
+
+  public async getCurrentPlayback() {
+    try {
+      const response = await this.request<SpotifyApi.CurrentPlaybackResponse>('me/player');
+      // Handle no active playback
+      if (!response) {
+        console.log('No active playback session');
+        return null;
+      }
+      return response;
+    } catch (error) {
+      // Handle expected errors
+      if (error instanceof Error) {
+        if (error.message.includes('404')) {
+          console.log('No active player found');
+          return null;
+        }
+        if (error.message.includes('The access token expired')) {
+          throw error; // Let auth context handle token refresh
+        }
+      }
+      console.error('Failed to get current playback:', error);
+      throw error;
+    }
   }
 
   public async createPlaylist(userId: string, name: string, description?: string) {
@@ -241,18 +311,6 @@ class SpotifyClient {
         body: JSON.stringify({ uris })
       }
     );
-  }
-
-  public async getCurrentPlayback() {
-    try {
-      return await this.request<SpotifyApi.CurrentPlaybackResponse>('me/player');
-    } catch (error) {
-      // Handle 204 No Content response
-      if (error instanceof Error && error.message.includes('204')) {
-        return null;
-      }
-      throw error;
-    }
   }
 
   public async getAudioFeatures(trackIds: string[]) {

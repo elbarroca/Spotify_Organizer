@@ -28,7 +28,8 @@ export function AuthCallback() {
         console.log('Auth callback initiated', {
           hasCode: !!code,
           hasError: !!error,
-          hasState: !!state
+          hasState: !!state,
+          timestamp: new Date().toISOString()
         });
 
         if (error) {
@@ -53,7 +54,10 @@ export function AuthCallback() {
 
         // Verify the state parameter
         if (!verifyState(state)) {
-          console.error('State verification failed');
+          console.error('State verification failed', {
+            receivedState: state,
+            timestamp: new Date().toISOString()
+          });
           toast.error('Authentication Failed', {
             description: 'Security verification failed. Please try again.'
           });
@@ -63,7 +67,9 @@ export function AuthCallback() {
         }
 
         setStatus('Exchanging code for access tokens...');
-        console.log('Exchanging authorization code for tokens...');
+        console.log('Exchanging authorization code for tokens...', {
+          timestamp: new Date().toISOString()
+        });
         
         // Exchange the code for tokens
         const tokens = await exchangeCodeForTokens(code);
@@ -71,9 +77,15 @@ export function AuthCallback() {
           throw new Error('No tokens received from Spotify');
         }
 
-        console.log('Successfully received tokens');
+        console.log('Successfully received tokens', {
+          hasAccessToken: !!tokens.accessToken,
+          hasRefreshToken: !!tokens.refreshToken,
+          expiresIn: tokens.expiresIn,
+          timestamp: new Date().toISOString()
+        });
         
         // Store tokens securely
+        secureStorage.clearAll(); // Clear any existing tokens first
         secureStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, tokens.accessToken);
         secureStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, tokens.refreshToken);
         secureStorage.setItem(
@@ -82,12 +94,16 @@ export function AuthCallback() {
         );
 
         setStatus('Storing user data...');
-        console.log('Storing user data in Appwrite...');
+        console.log('Storing user data in Appwrite...', {
+          timestamp: new Date().toISOString()
+        });
         
         try {
           // Store user data in Appwrite
           await storeSpotifyUserData(tokens.accessToken);
-          console.log('Successfully stored user data');
+          console.log('Successfully stored user data', {
+            timestamp: new Date().toISOString()
+          });
         } catch (error) {
           console.error('Failed to store user data:', error);
           // Continue with authentication even if storing user data fails
@@ -95,7 +111,9 @@ export function AuthCallback() {
         }
 
         setStatus('Verifying authentication...');
-        console.log('Refreshing authentication state...');
+        console.log('Refreshing authentication state...', {
+          timestamp: new Date().toISOString()
+        });
         
         // Wait for the auth context to update with the new session
         await refreshAuth();
@@ -103,13 +121,18 @@ export function AuthCallback() {
         // Add a small delay to ensure everything is updated
         await new Promise(resolve => setTimeout(resolve, 1000));
         
-        console.log('Authentication successful');
+        console.log('Authentication successful', {
+          timestamp: new Date().toISOString()
+        });
         toast.success('Successfully Logged In', {
           description: 'Welcome to Spotify Organizer!'
         });
         navigate('/dashboard');
       } catch (error) {
-        console.error('Authentication error:', error);
+        console.error('Authentication error:', error, {
+          timestamp: new Date().toISOString(),
+          stack: error instanceof Error ? error.stack : undefined
+        });
         const errorMessage = error instanceof Error ? error.message : 'Failed to authenticate';
         setError(errorMessage);
         toast.error('Authentication Failed', {
@@ -117,9 +140,7 @@ export function AuthCallback() {
         });
         
         // Clear any partial authentication state
-        Object.values(STORAGE_KEYS).forEach(key => {
-          secureStorage.removeItem(key);
-        });
+        secureStorage.clearAll();
         
         setTimeout(() => navigate('/'), 3000);
       }

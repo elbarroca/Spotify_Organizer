@@ -7,13 +7,16 @@ import {
   ArrowRight,
   Heart,
   ListMusic,
-  X
+  X,
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Dialog, DialogContent, DialogOverlay } from '@radix-ui/react-dialog';
 import { toast } from 'sonner';
-import { NowPlaying } from '@/components/NowPlaying';
 
 interface SpotifyImage {
   url: string;
@@ -116,12 +119,107 @@ const CACHE_KEYS = {
 } as const;
 
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
-const PLAYBACK_POLL_INTERVAL = 5000; // 5 seconds
-const BACKGROUND_POLL_INTERVAL = 30000; // 30 seconds
+const POLLING_INTERVAL = 10000; // 10 seconds
+const BACKGROUND_POLLING_INTERVAL = 30000; // 30 seconds
+const REQUEST_TIMEOUT = 10000; // 10 seconds
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 1 second
+
+class RequestQueue {
+  private queue: Map<string, {
+    promise: Promise<any>;
+    timestamp: number;
+    controller: AbortController;
+  }>;
+
+  constructor() {
+    this.queue = new Map();
+  }
+
+  async enqueue(
+    key: string,
+    requestFn: () => Promise<any>,
+    options: {
+      timeout?: number;
+      minInterval?: number;
+      force?: boolean;
+    } = {}
+  ) {
+    const {
+      timeout = REQUEST_TIMEOUT,
+      minInterval = 1000,
+      force = false
+    } = options;
+
+    try {
+      // Check if there's an existing request and it's not forced
+      const existing = this.queue.get(key);
+      if (existing && !force) {
+        const timeSinceLastRequest = Date.now() - existing.timestamp;
+        if (timeSinceLastRequest < minInterval) {
+          console.log(`Skipping request for ${key}, too soon since last request`);
+          return existing.promise;
+        }
+        // Abort existing request if it's still pending
+        existing.controller.abort();
+        this.queue.delete(key);
+      }
+
+      // Create new request with timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        this.queue.delete(key);
+      }, timeout);
+
+      const promise = (async () => {
+        try {
+          const result = await requestFn();
+          clearTimeout(timeoutId);
+          this.queue.delete(key);
+          return result;
+        } catch (error) {
+          if (error instanceof Error && error.name === 'AbortError') {
+            console.log(`Request ${key} aborted`);
+            return null;
+          }
+          throw error;
+        } finally {
+          clearTimeout(timeoutId);
+          this.queue.delete(key);
+        }
+      })();
+
+      this.queue.set(key, {
+        promise,
+        timestamp: Date.now(),
+        controller
+      });
+
+      return await promise;
+    } catch (error) {
+      this.queue.delete(key);
+      throw error;
+    }
+  }
+
+  clear() {
+    this.queue.forEach(({ controller }) => {
+      try {
+        controller.abort();
+      } catch (error) {
+        console.error('Error aborting request:', error);
+      }
+    });
+    this.queue.clear();
+  }
+}
 
 const Dashboard = () => {
+  // 1. All useState hooks
   const [autoPlaylists, setAutoPlaylists] = useState<AutoPlaylist[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [savingPlaylist, setSavingPlaylist] = useState<string | null>(null);
   const [currentlyPlaying, setCurrentlyPlaying] = useState<CurrentlyPlaying | null>(() => {
     const cached = localStorage.getItem(CACHE_KEYS.CURRENT_TRACK);
@@ -135,23 +233,106 @@ const Dashboard = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [playlistModalData, setPlaylistModalData] = useState<PlaylistModalData | null>(null);
   const [tracks, setTracks] = useState<SpotifyTrack[]>([]);
-  
-  const { user, token, spotifyApi } = useAuth();
+
+  // 2. All useContext hooks (from useAuth)
+  const { user, token, spotifyApi, isLoading: authLoading } = useAuth();
   const navigate = useNavigate();
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const backgroundPollRef = useRef<NodeJS.Timeout | null>(null);
-  const isPollingRef = useRef(false);
+
+  // 3. All useRef hooks
+  const requestQueueRef = useRef<RequestQueue>(new RequestQueue());
+  const pollingEnabledRef = useRef<boolean>(true);
+  const retryCountRef = useRef<Map<string, number>>(new Map());
+
+  // 4. All useCallback hooks
+  const queuedFetch = useCallback(async (
+    key: string,
+    requestFn: () => Promise<any>,
+    options: {
+      timeout?: number;
+      minInterval?: number;
+      force?: boolean;
+      maxRetries?: number;
+    } = {}
+  ) => {
+    const {
+      maxRetries = MAX_RETRIES,
+      ...fetchOptions
+    } = options;
+
+    const retryCount = retryCountRef.current.get(key) || 0;
+    if (retryCount >= maxRetries) {
+      console.error(`Max retries reached for ${key}`);
+      pollingEnabledRef.current = false;
+      toast.error('Too many errors occurred. Polling disabled.');
+      return null;
+    }
+
+    try {
+      const result = await requestQueueRef.current.enqueue(key, requestFn, fetchOptions);
+      retryCountRef.current.delete(key);
+      return result;
+    } catch (error) {
+      retryCountRef.current.set(key, retryCount + 1);
+      console.error(`Request failed (${retryCount + 1}/${maxRetries}):`, {
+        key,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      
+      if (retryCount < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * Math.pow(2, retryCount)));
+        return queuedFetch(key, requestFn, options);
+      }
+      
+      throw error;
+    }
+  }, []);
 
   const fetchCurrentlyPlaying = useCallback(async (force = false) => {
-    if (!token || isPollingRef.current) return;
-    
+    if (!token || !pollingEnabledRef.current) return;
+
     try {
-      isPollingRef.current = true;
-      const data = await spotifyApi.get('me/player');
-      
-      if (!data || !data.item) {
-        setCurrentlyPlaying(null);
-        localStorage.removeItem(CACHE_KEYS.CURRENT_TRACK);
+      const data = await queuedFetch(
+        'currently-playing',
+        async () => {
+          const response = await spotifyApi.get('me/player/currently-playing');
+          
+          if (!response || response === null || response === '') {
+            console.log('No active playback session');
+            try {
+              const playerState = await spotifyApi.get('me/player');
+              if (playerState && playerState.item) {
+                return playerState;
+              }
+            } catch (playerError) {
+              console.log('Failed to get player state:', playerError);
+            }
+            return null;
+          }
+          
+          return response;
+        },
+        { 
+          minInterval: force ? 0 : POLLING_INTERVAL / 2,
+          force,
+          timeout: REQUEST_TIMEOUT
+        }
+      );
+
+      if (!data) {
+        if (currentlyPlaying) {
+          console.log('No active playback, clearing state');
+          setCurrentlyPlaying(null);
+          localStorage.removeItem(CACHE_KEYS.CURRENT_TRACK);
+        }
+        return;
+      }
+
+      if (!data.item) {
+        console.log('No track data in response');
+        if (currentlyPlaying) {
+          setCurrentlyPlaying(null);
+          localStorage.removeItem(CACHE_KEYS.CURRENT_TRACK);
+        }
         return;
       }
 
@@ -161,18 +342,53 @@ const Dashboard = () => {
         progress_ms: data.progress_ms
       };
 
-      setCurrentlyPlaying(newState);
-      localStorage.setItem(CACHE_KEYS.CURRENT_TRACK, JSON.stringify(newState));
+      if (!currentlyPlaying || 
+          currentlyPlaying.item?.id !== newState.item.id || 
+          currentlyPlaying.is_playing !== newState.is_playing) {
+        console.log('Updating currently playing state:', newState);
+        setCurrentlyPlaying(newState);
+        localStorage.setItem(CACHE_KEYS.CURRENT_TRACK, JSON.stringify(newState));
+      }
     } catch (error) {
       console.error('Failed to fetch currently playing:', error);
-    } finally {
-      isPollingRef.current = false;
+      
+      if (error instanceof Error) {
+        const message = error.message.toLowerCase();
+        if (message.includes('401')) {
+          toast.error('Session expired. Please log in again.');
+          return;
+        }
+        if (message.includes('403')) {
+          pollingEnabledRef.current = false;
+          toast.error('Insufficient permissions', {
+            description: 'Please log out and log in again to grant the required permissions.'
+          });
+          return;
+        }
+        if (message.includes('429')) {
+          pollingEnabledRef.current = false;
+          setTimeout(() => {
+            pollingEnabledRef.current = true;
+          }, 60000);
+          toast.error('Too many requests. Waiting before trying again.');
+          return;
+        }
+        if (message.includes('not found') || message.includes('404')) {
+          console.log('Player endpoint not available, will retry later');
+          return;
+        }
+      }
+      
+      if (!force) {
+        toast.error('Failed to update playback status');
+      }
     }
-  }, [token, spotifyApi]);
+  }, [token, spotifyApi, queuedFetch, currentlyPlaying]);
 
   const generatePersonalizedPlaylists = useCallback(async (force = false) => {
+    if (!pollingEnabledRef.current) return;
+
     try {
-      // Check cache first
       const lastFetch = localStorage.getItem(CACHE_KEYS.LAST_FETCH);
       const cachedPlaylists = localStorage.getItem(CACHE_KEYS.RECENTLY_PLAYED);
       
@@ -184,148 +400,102 @@ const Dashboard = () => {
         }
       }
 
-      const tracksData = await spotifyApi.get('me/tracks?limit=50');
-      const tracks = tracksData.items.map((item: any) => ({
-        ...item.track,
-        type: 'track',
-        is_local: item.track.is_local || false,
-        disc_number: item.track.disc_number || 1,
-        track_number: item.track.track_number || 1,
-        explicit: item.track.explicit || false,
-        preview_url: item.track.preview_url || null,
-        popularity: item.track.popularity || 0,
-        available_markets: item.track.available_markets || [],
-        external_ids: item.track.external_ids || {},
-        external_urls: item.track.external_urls || { spotify: '' },
-        href: item.track.href || '',
-        uri: item.track.uri || '',
-        album: {
-          ...item.track.album,
-          type: 'album',
-          album_type: item.track.album.album_type || 'album',
-          release_date_precision: item.track.album.release_date_precision || 'day',
-          total_tracks: item.track.album.total_tracks || 1,
-          uri: item.track.album.uri || '',
-          href: item.track.album.href || '',
-          external_urls: item.track.album.external_urls || { spotify: '' },
-          artists: item.track.album.artists.map((artist: any) => ({
-            ...artist,
-            type: 'artist',
-            uri: artist.uri || '',
-            href: artist.href || '',
-            external_urls: artist.external_urls || { spotify: '' }
-          }))
-        },
-        artists: item.track.artists.map((artist: any) => ({
-          ...artist,
-          type: 'artist',
-          uri: artist.uri || '',
-          href: artist.href || '',
-          external_urls: artist.external_urls || { spotify: '' }
-        }))
-      }));
+      const recentlyPlayed = await queuedFetch(
+        'recently-played',
+        () => spotifyApi.get('me/player/recently-played'),
+        { 
+          minInterval: force ? 0 : CACHE_DURATION / 2,
+          force,
+          maxRetries: force ? 1 : MAX_RETRIES
+        }
+      );
 
+      if (!recentlyPlayed?.items) {
+        console.log('No recently played tracks, trying saved tracks');
+        const savedTracks = await queuedFetch(
+          'saved-tracks',
+          () => spotifyApi.get('me/tracks?limit=50'),
+          { force: true, maxRetries: 1 }
+        );
+
+        if (!savedTracks?.items) {
+          console.log('No saved tracks available');
+          return;
+        }
+
+        const tracks = savedTracks.items.map((item: any) => item.track);
+        const generatedPlaylists = [
+          {
+            id: 'saved',
+            name: 'Saved Tracks',
+            description: 'Your liked songs',
+            tracks: tracks.slice(0, 20),
+            isEditing: false
+          }
+        ];
+
+        setAutoPlaylists(generatedPlaylists);
+        localStorage.setItem(CACHE_KEYS.RECENTLY_PLAYED, JSON.stringify(generatedPlaylists));
+        localStorage.setItem(CACHE_KEYS.LAST_FETCH, Date.now().toString());
+        return;
+      }
+
+      const tracks = recentlyPlayed.items.map((item: any) => item.track);
       const generatedPlaylists = [
         {
           id: 'recent',
-          name: 'Recently Added',
-          description: 'Your latest musical discoveries',
+          name: 'Recently Played',
+          description: 'Your latest musical journey',
           tracks: tracks.slice(0, 20),
           isEditing: false
         }
       ];
 
       setAutoPlaylists(generatedPlaylists);
-      
-      // Update cache
       localStorage.setItem(CACHE_KEYS.RECENTLY_PLAYED, JSON.stringify(generatedPlaylists));
       localStorage.setItem(CACHE_KEYS.LAST_FETCH, Date.now().toString());
     } catch (error) {
       console.error('Failed to generate playlists:', error);
-      toast.error('Failed to load your music data');
+      if (!force) {
+        if (error instanceof Error) {
+          const message = error.message.toLowerCase();
+          if (message.includes('403')) {
+            toast.error('Insufficient permissions. Please log in again.');
+          } else if (message.includes('429')) {
+            toast.error('Too many requests. Please try again later.');
+          } else if (message.includes('not found') || message.includes('404')) {
+            console.log('Playlist endpoints not available, will retry later');
+          } else {
+            toast.error('Failed to load your music data');
+          }
+        } else {
+          toast.error('Failed to load your music data');
+        }
+      }
     }
-  }, [spotifyApi]);
-
-  // Initial data load
-  useEffect(() => {
-    if (!token) {
-      navigate('/');
-      return;
-    }
-
-    const initializeDashboard = async () => {
-      setLoading(true);
-      try {
-        await Promise.all([
-          generatePersonalizedPlaylists(),
-          fetchCurrentlyPlaying(true)
-        ]);
-      } catch (error) {
-        console.error('Dashboard initialization error:', error);
-        toast.error('Failed to load dashboard data');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    initializeDashboard();
-  }, [token, navigate, generatePersonalizedPlaylists, fetchCurrentlyPlaying]);
-
-  // Set up polling
-  useEffect(() => {
-    if (!token) return;
-
-    // Active tab polling
-    pollIntervalRef.current = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        fetchCurrentlyPlaying();
-      }
-    }, PLAYBACK_POLL_INTERVAL);
-
-    // Background polling
-    backgroundPollRef.current = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        generatePersonalizedPlaylists();
-      }
-    }, BACKGROUND_POLL_INTERVAL);
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        fetchCurrentlyPlaying(true);
-        generatePersonalizedPlaylists();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-      if (backgroundPollRef.current) clearInterval(backgroundPollRef.current);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [token, fetchCurrentlyPlaying, generatePersonalizedPlaylists]);
+  }, [spotifyApi, queuedFetch]);
 
   const handlePlaybackChange = useCallback(async () => {
     await fetchCurrentlyPlaying(true);
   }, [fetchCurrentlyPlaying]);
 
-  const handleEditName = (playlistId: string) => {
+  const handleEditName = useCallback((playlistId: string) => {
     setAutoPlaylists(playlists => 
       playlists.map(p => 
         p.id === playlistId ? { ...p, isEditing: true } : p
       )
     );
-  };
+  }, []);
 
-  const handleNameChange = (playlistId: string, newName: string) => {
+  const handleNameChange = useCallback((playlistId: string, newName: string) => {
     setAutoPlaylists(playlists =>
       playlists.map(p =>
         p.id === playlistId ? { ...p, name: newName, isEditing: false } : p
       )
     );
-  };
+  }, []);
 
-  const showToast = (
+  const showToast = useCallback((
     type: 'success' | 'error' | 'loading',
     message: string,
     description?: string | React.ReactNode
@@ -345,7 +515,146 @@ const Dashboard = () => {
     }
     
     return id;
-  };
+  }, []);
+
+  // 5. All useEffect hooks
+  useEffect(() => {
+    if (authLoading) return;
+
+    if (!token || !user) {
+      navigate('/');
+      return;
+    }
+
+    const initializeDashboard = async () => {
+      setLoading(true);
+      setError(null);
+      
+      try {
+        const [playlistsResult, currentTrack] = await Promise.allSettled([
+          generatePersonalizedPlaylists(true),
+          fetchCurrentlyPlaying(true)
+        ]);
+
+        if (playlistsResult.status === 'rejected') {
+          console.error('Failed to load playlists:', playlistsResult.reason);
+          toast.error('Failed to load your playlists');
+        }
+
+        if (currentTrack.status === 'rejected') {
+          console.error('Failed to load current track:', currentTrack.reason);
+          toast.error('Failed to load current playback');
+        }
+
+      } catch (error) {
+        console.error('Dashboard initialization error:', error);
+        setError('Failed to load dashboard data');
+        toast.error('Failed to load dashboard data');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initializeDashboard();
+  }, [token, user, authLoading, navigate, generatePersonalizedPlaylists, fetchCurrentlyPlaying]);
+
+  useEffect(() => {
+    if (!token || !user) return;
+
+    let pollInterval: NodeJS.Timeout;
+    let backgroundPollInterval: NodeJS.Timeout;
+
+    const setupPolling = () => {
+      pollingEnabledRef.current = true;
+      retryCountRef.current.clear();
+      requestQueueRef.current.clear();
+
+      if (pollInterval) clearInterval(pollInterval);
+      if (backgroundPollInterval) clearInterval(backgroundPollInterval);
+
+      if (document.visibilityState === 'visible') {
+        Promise.allSettled([
+          fetchCurrentlyPlaying(true),
+          generatePersonalizedPlaylists(true)
+        ]).then(results => {
+          results.forEach((result, index) => {
+            if (result.status === 'rejected') {
+              console.error(`Initial fetch ${index} failed:`, result.reason);
+            }
+          });
+        });
+
+        pollInterval = setInterval(() => {
+          if (pollingEnabledRef.current && document.visibilityState === 'visible') {
+            fetchCurrentlyPlaying().catch(error => {
+              console.error('Player polling failed:', error);
+              if (error instanceof Error && error.message.includes('429')) {
+                pollingEnabledRef.current = false;
+                setTimeout(() => {
+                  pollingEnabledRef.current = true;
+                }, 60000);
+              }
+            });
+          }
+        }, POLLING_INTERVAL);
+
+        backgroundPollInterval = setInterval(() => {
+          if (pollingEnabledRef.current && document.visibilityState === 'visible') {
+            generatePersonalizedPlaylists().catch(error => {
+              console.error('Playlist polling failed:', error);
+            });
+          }
+        }, BACKGROUND_POLLING_INTERVAL);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setupPolling();
+      } else {
+        if (pollInterval) clearInterval(pollInterval);
+        if (backgroundPollInterval) clearInterval(backgroundPollInterval);
+        requestQueueRef.current.clear();
+      }
+    };
+
+    setupPolling();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (pollInterval) clearInterval(pollInterval);
+      if (backgroundPollInterval) clearInterval(backgroundPollInterval);
+      requestQueueRef.current.clear();
+    };
+  }, [token, user, fetchCurrentlyPlaying, generatePersonalizedPlaylists]);
+
+  // Loading state UI
+  if (loading || authLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-spotify-green" />
+        <span className="ml-2 text-lg font-medium">Loading your music...</span>
+      </div>
+    );
+  }
+
+  // Error state UI
+  if (error) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-4">
+        <X className="h-12 w-12 text-red-500" />
+        <h2 className="text-xl font-semibold">Something went wrong</h2>
+        <p className="text-gray-600">{error}</p>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-4 rounded-full bg-spotify-green px-6 py-2 font-medium text-white hover:bg-spotify-green/90"
+        >
+          Try Again
+        </button>
+      </div>
+    );
+  }
 
   const handleSavePlaylist = async () => {
     const loadingToastId = showToast('loading', 'Creating playlist...', 'Please wait while we set everything up');
@@ -414,11 +723,15 @@ const Dashboard = () => {
     if (!token) return;
     
     try {
-      await spotifyApi.post('me/player/next');
-      setTimeout(() => fetchCurrentlyPlaying(true), 100);
+      await spotifyApi.post('me/player/next', {});
+      // Wait for Spotify API to update
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await fetchCurrentlyPlaying(true);
     } catch (error) {
       console.error('Failed to skip track:', error);
-      toast.error('Failed to skip track');
+      toast.error('Failed to skip track', {
+        description: 'Please try again or check your Spotify connection'
+      });
     }
   };
 
@@ -426,11 +739,15 @@ const Dashboard = () => {
     if (!token) return;
     
     try {
-      await spotifyApi.post('me/player/previous');
-      setTimeout(() => fetchCurrentlyPlaying(true), 100);
+      await spotifyApi.post('me/player/previous', {});
+      // Wait for Spotify API to update
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await fetchCurrentlyPlaying(true);
     } catch (error) {
       console.error('Failed to skip to previous track:', error);
-      toast.error('Failed to skip to previous track');
+      toast.error('Failed to skip to previous track', {
+        description: 'Please try again or check your Spotify connection'
+      });
     }
   };
 
@@ -670,30 +987,97 @@ const Dashboard = () => {
         </button>
       </div>
 
-      {/* Now Playing Section */}
-      {currentlyPlaying?.item && (
-        <NowPlaying
-          currentTrack={currentlyPlaying.item}
-          isPlaying={currentlyPlaying.is_playing}
-          onPlaybackChange={handlePlaybackChange}
-          onGetSimilar={handleGetSimilarSongs}
-          onAddToLiked={handleAddToLiked}
-        />
-      )}
+      {/* Now Playing Card */}
+      <div className="w-full mb-12">
+        {currentlyPlaying?.item ? (
+          <div 
+            key={currentlyPlaying.item.id}
+            onClick={() => setIsTrackModalOpen(true)}
+            className="w-full p-8 bg-gradient-to-br from-emerald-500/5 via-emerald-500/10 to-emerald-400/5 hover:from-emerald-500/10 hover:via-emerald-500/15 hover:to-emerald-400/10 rounded-2xl backdrop-blur-sm border border-emerald-500/10 hover:border-emerald-500/20 transition-all duration-500 cursor-pointer group shadow-lg shadow-emerald-500/10 hover:shadow-emerald-500/20 animate-in fade-in-0 slide-in-from-bottom-4 duration-700"
+          >
+            <div className="flex items-center gap-8 max-w-7xl mx-auto">
+              {/* Album Art with Enhanced Animation */}
+              <div className="relative flex-shrink-0">
+                <img 
+                  src={currentlyPlaying.item.album.images[0]?.url}
+                  alt={currentlyPlaying.item.album.name}
+                  className="w-32 h-32 rounded-lg shadow-xl transition-all duration-500 group-hover:scale-105 group-hover:shadow-emerald-500/20 object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-emerald-500/20 to-transparent rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-500" />
+                <div className="absolute inset-0 bg-emerald-500/10 blur-2xl rounded-full opacity-0 group-hover:opacity-100 transition-all duration-700" />
+              </div>
 
-      {!currentlyPlaying && (
-        <div className="mb-12 bg-gray-800/50 backdrop-blur-sm rounded-xl p-6">
-          <h2 className="text-2xl font-bold text-white mb-2">Playback Status</h2>
-          <p className="text-gray-400">
-            No track currently playing. Make sure:
-          </p>
-          <ul className="list-disc list-inside text-gray-400 mt-2">
-            <li>Spotify is open and playing music</li>
-            <li>You're using the same Spotify account</li>
-            <li>Your device is active and online</li>
-          </ul>
-        </div>
-      )}
+              {/* Track Info with Enhanced Typography */}
+              <div className="flex-1 min-w-0">
+                <h3 className="text-2xl font-bold text-white mb-2 line-clamp-1 group-hover:text-emerald-300 transition-colors duration-300">
+                  {currentlyPlaying.item.name}
+                </h3>
+                <p className="text-lg text-gray-400 mb-6 line-clamp-1 group-hover:text-emerald-400/70 transition-colors duration-300">
+                  {currentlyPlaying.item.artists.map(a => a.name).join(', ')}
+                </p>
+
+                {/* Playback Controls with Enhanced Animation */}
+                <div className="flex items-center gap-6" onClick={e => e.stopPropagation()}>
+                  <button
+                    onClick={handleSkipPrevious}
+                    className="p-3 text-gray-400 hover:text-emerald-400 transition-all duration-300 hover:scale-110 hover:bg-emerald-500/10 rounded-full"
+                    aria-label="Previous track"
+                  >
+                    <SkipBack className="w-6 h-6" />
+                  </button>
+                  
+                  <button
+                    onClick={handlePlayPause}
+                    className="p-4 bg-gradient-to-r from-emerald-500 to-emerald-400 text-white rounded-full hover:scale-110 hover:shadow-lg hover:shadow-emerald-500/25 transition-all duration-300 transform-gpu"
+                    aria-label={currentlyPlaying.is_playing ? "Pause" : "Play"}
+                  >
+                    {currentlyPlaying.is_playing ? (
+                      <Pause className="w-6 h-6" />
+                    ) : (
+                      <Play className="w-6 h-6" />
+                    )}
+                  </button>
+                  
+                  <button
+                    onClick={handleSkipNext}
+                    className="p-3 text-gray-400 hover:text-emerald-400 transition-all duration-300 hover:scale-110 hover:bg-emerald-500/10 rounded-full"
+                    aria-label="Next track"
+                  >
+                    <SkipForward className="w-6 h-6" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Action Buttons with Enhanced Hover Effects */}
+              <div className="flex gap-4" onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={handleGetSimilarSongs}
+                  className="p-3 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-xl transition-all duration-300 hover:scale-110 hover:shadow-lg hover:shadow-emerald-500/20 border border-emerald-500/20"
+                  aria-label="Find similar songs"
+                >
+                  <ListMusic className="w-6 h-6" />
+                </button>
+                <button
+                  onClick={handleAddToLiked}
+                  className="p-3 text-pink-500 hover:text-pink-400 hover:bg-pink-500/10 rounded-xl transition-all duration-300 hover:scale-110 hover:shadow-lg hover:shadow-pink-500/20 border border-pink-500/20"
+                  aria-label="Add to liked songs"
+                >
+                  <Heart className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="w-full p-8 bg-gradient-to-br from-emerald-500/5 via-emerald-500/10 to-emerald-400/5 rounded-2xl backdrop-blur-sm border border-emerald-500/10 shadow-lg shadow-emerald-500/10">
+            <div className="max-w-7xl mx-auto">
+              <h2 className="text-2xl font-bold text-emerald-300 mb-2">No Track Playing</h2>
+              <p className="text-gray-400 text-lg">
+                Start playing something on Spotify to see it here
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Track Details Modal */}
       <Dialog open={isTrackModalOpen} onOpenChange={setIsTrackModalOpen}>

@@ -2,8 +2,6 @@ import { appwriteConfig } from '@/config/appwrite';
 import { SPOTIFY_CONFIG } from '@/config/spotify';
 import { account, databases } from './appwrite';
 import { ID, Query, AppwriteException } from 'appwrite';
-import { SpotifyUser } from '@/types/database';
-
 const USERS_DATABASE_ID = appwriteConfig.databaseId;
 const USERS_COLLECTION_ID = appwriteConfig.usersCollectionId;
 
@@ -319,9 +317,14 @@ export const secureStorage = {
         tokenCache.expiresAt = new Date(value);
       }
       
-      console.log(`Stored encrypted value for key: ${key}`);
+      console.log(`Stored encrypted value for key: ${key}`, {
+        timestamp: new Date().toISOString()
+      });
     } catch (error) {
-      console.error('Error storing token:', error);
+      console.error('Error storing token:', error, {
+        timestamp: new Date().toISOString(),
+        stack: error instanceof Error ? error.stack : undefined
+      });
       throw error;
     }
   },
@@ -362,7 +365,10 @@ export const secureStorage = {
       
       return decrypted;
     } catch (error) {
-      console.error('Error retrieving token:', error);
+      console.error('Error retrieving token:', error, {
+        timestamp: new Date().toISOString(),
+        stack: error instanceof Error ? error.stack : undefined
+      });
       return null;
     }
   },
@@ -397,9 +403,14 @@ export const secureStorage = {
       tokenCache.refreshToken = null;
       tokenCache.expiresAt = null;
       
-      console.log('Cleared all stored values');
+      console.log('Cleared all stored values', {
+        timestamp: new Date().toISOString()
+      });
     } catch (error) {
-      console.error('Error clearing all tokens:', error);
+      console.error('Error clearing tokens:', error, {
+        timestamp: new Date().toISOString(),
+        stack: error instanceof Error ? error.stack : undefined
+      });
     }
   },
   
@@ -589,14 +600,15 @@ interface SpotifyTokens {
 }
 
 export const exchangeCodeForTokens = async (code: string, retryCount = 0): Promise<SpotifyTokens> => {
-  console.log('Exchanging code for tokens...', { retryCount });
+  console.log('Exchanging code for tokens...', { retryCount, timestamp: new Date().toISOString() });
   
   // Validate configuration
   if (!SPOTIFY_CONFIG.clientId || !SPOTIFY_CONFIG.clientSecret || !SPOTIFY_CONFIG.redirectUri) {
     console.error('Missing Spotify configuration:', {
       hasClientId: !!SPOTIFY_CONFIG.clientId,
       hasClientSecret: !!SPOTIFY_CONFIG.clientSecret,
-      redirectUri: SPOTIFY_CONFIG.redirectUri
+      redirectUri: SPOTIFY_CONFIG.redirectUri,
+      timestamp: new Date().toISOString()
     });
     throw new Error('Invalid Spotify configuration');
   }
@@ -619,7 +631,8 @@ export const exchangeCodeForTokens = async (code: string, retryCount = 0): Promi
         'Authorization': `Basic ${credentials.substring(0, 10)}...`,
       },
       body: requestBody.toString(),
-      redirect_uri: SPOTIFY_CONFIG.redirectUri // Log separately for clarity
+      redirect_uri: SPOTIFY_CONFIG.redirectUri,
+      timestamp: new Date().toISOString()
     });
 
     const response = await fetch('https://accounts.spotify.com/api/token', {
@@ -637,12 +650,15 @@ export const exchangeCodeForTokens = async (code: string, retryCount = 0): Promi
         status: response.status,
         statusText: response.statusText,
         error: errorData,
-        requestBody: requestBody.toString()
+        requestBody: requestBody.toString(),
+        timestamp: new Date().toISOString()
       });
 
       // If we get a 5xx error or network error, retry
       if ((response.status >= 500 || !response.status) && retryCount < MAX_RETRIES) {
-        console.log(`Retrying token exchange (${retryCount + 1}/${MAX_RETRIES})...`);
+        console.log(`Retrying token exchange (${retryCount + 1}/${MAX_RETRIES})...`, {
+          timestamp: new Date().toISOString()
+        });
         await wait(RETRY_DELAY * Math.pow(2, retryCount)); // Exponential backoff
         return exchangeCodeForTokens(code, retryCount + 1);
       }
@@ -662,7 +678,8 @@ export const exchangeCodeForTokens = async (code: string, retryCount = 0): Promi
     console.log('Token exchange successful:', {
       hasAccessToken: !!data.access_token,
       hasRefreshToken: !!data.refresh_token,
-      expiresIn: data.expires_in
+      expiresIn: data.expires_in,
+      timestamp: new Date().toISOString()
     });
 
     // Validate the response data
@@ -670,7 +687,8 @@ export const exchangeCodeForTokens = async (code: string, retryCount = 0): Promi
       console.error('Invalid token response:', {
         hasAccessToken: !!data.access_token,
         hasRefreshToken: !!data.refresh_token,
-        responseData: data
+        responseData: data,
+        timestamp: new Date().toISOString()
       });
       throw new Error('Invalid token response: missing required tokens');
     }
@@ -681,7 +699,10 @@ export const exchangeCodeForTokens = async (code: string, retryCount = 0): Promi
       expiresIn: data.expires_in
     };
   } catch (error) {
-    console.error('Token exchange error:', error);
+    console.error('Token exchange error:', error, {
+      timestamp: new Date().toISOString(),
+      stack: error instanceof Error ? error.stack : undefined
+    });
     throw error;
   }
 };
